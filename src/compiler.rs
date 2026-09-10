@@ -20,9 +20,15 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Print(expr) => {
+            Stmt::Print(exprs) => {
+                for expr in exprs {
+                    self.compile_expr(expr);
+                    self.bytecode.push(OpCode::Print);
+                }
+            }
+            Stmt::Let(name,expr) => {
                 self.compile_expr(expr);
-                self.bytecode.push(OpCode::Print);
+                self.bytecode.push(OpCode::StoreGlobal(name.clone()));
             }
         }
     }
@@ -38,7 +44,14 @@ impl Compiler {
 
                 match op {
                     BinaryOp::Add => self.bytecode.push(OpCode::Add),
+                    BinaryOp::Sub => self.bytecode.push(OpCode::Sub),
+                    BinaryOp::Div => self.bytecode.push(OpCode::Div),
+                    BinaryOp::Mul => self.bytecode.push(OpCode::Mul),
+
                 }
+            }
+            Expr::Variable(name) => {
+                self.bytecode.push(OpCode::LoadGlobal(name.clone()));
             }
          }
     }

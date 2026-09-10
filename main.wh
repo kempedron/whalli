@@ -1,0 +1,5 @@
+let username = "kepr";
+let email = "kepr";
+let email = f"{email}@gmail.com";
+print("{username}: {email}\n");
+print(f"{username}: {email}\n");

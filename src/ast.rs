@@ -1,17 +1,22 @@
 use crate::value::Value;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOp {
     Add,
+    Sub,
+    Div,
+    Mul
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Value),
+    Variable(String),
     Binary(Box<Expr>,BinaryOp, Box<Expr>),
 }
 
 #[derive(Debug)]
 pub enum Stmt {
-    Print(Expr),
+    Print(Vec<Expr>),
+    Let(String, Expr),
 }
