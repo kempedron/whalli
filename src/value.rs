@@ -1,9 +1,8 @@
-use std::{cell::RefCell, ops::{Add,Mul,Div,Sub}, rc::Rc};
+use std::{cell::RefCell, ops::{Add, Div, Mul, Sub}, rc::Rc};
 
 use crate::opcode::OpCode;
 
 #[derive(Debug, Clone, PartialEq)]
-
 pub struct FunctionObj {
     pub name: String,
     pub arity: usize,
@@ -17,7 +16,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(Rc<String>),
-    Pointer(Rc<RefCell<Value>>),
+    List(Rc<RefCell<Vec<Value>>>),
     Function(Rc<FunctionObj>),
 }
 
@@ -35,6 +34,9 @@ impl Add for Value {
                 combined.push_str(&b);
                 Value::Str(Rc::new(combined))
             }
+            (Value::Str(a), Value::Int(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
+            (Value::Int(a), Value::Str(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
+
             _ => panic!("Runtime error: invalid types for Add"),
 
         }

@@ -18,7 +18,7 @@ fn main() -> std::io::Result<()> {
     // whalli main.wh
     let args: Vec<String> = env::args().collect();
     let source_code = fs::read_to_string(args[1].as_str())?;
-    println!("Код: {}", source_code);
+    // println!("Код: {}", source_code);
 
     let mut lexer = Lexer::new(source_code.as_str());
     let tokens = lexer.tokenize();
@@ -29,7 +29,7 @@ fn main() -> std::io::Result<()> {
     let compiler = Compiler::new();
     let bytecode = compiler.compile(&ast);
 
-    println!("--- Выполнение ---");
+    // println!("--- Выполнение ---");
     let mut vm = VM::new(bytecode);
     vm.run();
     Ok(())

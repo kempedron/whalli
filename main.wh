@@ -1,5 +1,4 @@
-let username = "kepr";
-let email = "kepr";
-let email = f"{email}@gmail.com";
-print("{username}: {email}\n");
-print(f"{username}: {email}\n");
+let items = [10, 20, 30];
+for item in items {
+    print(f"Элемент: {item}\n");
+}

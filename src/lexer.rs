@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Print,
@@ -14,9 +13,26 @@ pub enum TokenKind {
     Comma, // ,
     Float(f64),
     Int(i64),
+    True,
+    False,
     Str(String),
     FStr(String),
+    // List,
     Identifier(String), // var name
+    Function,
+    LBrace, // {
+    RBrace, // }
+    Return,
+    If,
+    Else,
+    Equal,
+    Less, // <
+    Greater, // >
+    While,
+    LBracket, // [
+    RBracket, // ]
+    For,
+    In,
     Eof,
 }
 #[derive(Debug, Clone)]
@@ -70,7 +86,20 @@ impl Lexer {
                     self.pos += 1;
                 }
                 '=' => {
-                    tokens.push(self.make_token(TokenKind::Assign));
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '='{
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::Equal));
+                    } else {
+                        self.pos += 1;
+                        tokens.push(self.make_token(TokenKind::Assign));
+                    }
+                }
+                '>' => {
+                    tokens.push(self.make_token(TokenKind::Greater));
+                    self.pos += 1;
+                }
+                '<' => {
+                    tokens.push(self.make_token(TokenKind::Less));
                     self.pos += 1;
                 }
                 ';'=> {
@@ -87,6 +116,22 @@ impl Lexer {
                 }
                 ')' => {
                     tokens.push(self.make_token(TokenKind::RParen));
+                    self.pos += 1;
+                }
+                '{' => {
+                    tokens.push(self.make_token(TokenKind::LBrace));
+                    self.pos += 1;
+                }
+                '}' => {
+                    tokens.push(self.make_token(TokenKind::RBrace));
+                    self.pos += 1;
+                }
+                '[' => {
+                    tokens.push(self.make_token(TokenKind::LBracket));
+                    self.pos += 1;
+                }
+                ']' => {
+                    tokens.push(self.make_token(TokenKind::RBracket));
                     self.pos += 1;
                 }
                 'f' => {
@@ -117,7 +162,8 @@ impl Lexer {
                         tokens.push(self.make_token(TokenKind::FStr(s)));
                     } else {
                         let word = self.read_word();
-                        tokens.push(self.make_token(TokenKind::Identifier(word)));
+                        let kind = Self::ident_or_keyword(word);
+                        tokens.push(self.make_token(kind));
                     }
                 }
                 '"' => {
@@ -152,17 +198,31 @@ impl Lexer {
                 }
                 c if c.is_ascii_alphabetic() => {
                     let word = self.read_word();
-                    match word.as_str() {
-                        "print" => tokens.push(self.make_token(TokenKind::Print)),
-                        "let" => tokens.push(self.make_token(TokenKind::Let)),
-                        _ => tokens.push(self.make_token(TokenKind::Identifier(word))),
-                    }
+                    let kind = Self::ident_or_keyword(word);
+                    tokens.push(self.make_token(kind));
                 }
                 _ => panic!("lexer: undefined char {}", current),
             }
         }
         tokens.push(self.make_token(TokenKind::Eof));
         tokens
+    }
+
+    fn ident_or_keyword(word: String) -> TokenKind {
+        match word.as_str() {
+            "print" => TokenKind::Print,
+            "let" => TokenKind::Let,
+            "func" => TokenKind::Function,
+            "return" => TokenKind::Return,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "while" => TokenKind::While,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
+            _ => TokenKind::Identifier(word),
+        }
     }
 
     fn read_number(&mut self) -> Token {
