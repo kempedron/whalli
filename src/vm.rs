@@ -1,5 +1,5 @@
 use crate::{opcode::OpCode, value::{FunctionObj, Value}};
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, process::id, rc::Rc};
 
 
 pub struct CallFrame {
@@ -30,10 +30,12 @@ impl VM {
             stack_offset: 0,
         };
 
+        let globals = crate::stdlib::register_natives();
+        
         VM {
             stack: Vec::new(),
             frames: vec![initial_frame],
-            globals: HashMap::new(),
+            globals: globals,
         }
     }
 
@@ -76,18 +78,6 @@ impl VM {
                     let a = self.stack.pop().expect("Error: stack empty");
                     self.stack.push(a/b);
                 }
-
-                OpCode::Print => {
-                    let val = self.stack.pop().expect("Error: stack empty");
-                    match val {
-                        Value::Int(n) => print!("{}",n),
-                        Value::Float(n) => print!("{}",n),
-                        Value::Bool(n) => print!("{}",n),
-                        Value::Str(n) => print!("{}",n),
-                        Value::List(n) => print!("{:?}",n),
-                        _ => panic!("invalid type: {:?}",val),
-                    }
-                }
                 OpCode::StoreGlobal(name) => {
                     let val = self.stack.pop().expect("Error: stack empty for assignment");
                     self.globals.insert(name.clone(), val);
@@ -116,6 +106,18 @@ impl VM {
                                 stack_offset: callee_index + 1,
                             };
                             self.frames.push(new_frame);
+                        }
+                        Value::Native(native_fn) => {
+                            let mut args = Vec::with_capacity(arg_count);{
+                                for _ in 0..arg_count {
+                                    args.push(self.stack.pop().unwrap());
+                                }
+                                args.reverse();
+                                self.stack.pop();
+
+                                let result = native_fn(args);
+                                self.stack.push(result);
+                            }
                         }
                         _ => panic!("Runtime error: attempt to call a non-function value")
                     }
@@ -199,9 +201,52 @@ impl VM {
                         _ => panic!("Runtime error: Invalid array or index"),
                     }
                 }
+                OpCode::IndexSet => {
+                    let value = self.stack.pop().expect("Stack empty");
+                    let index = self.stack.pop().expect("Stack empty");
+                    let array = self.stack.pop().expect("Stack empty");
 
+                    match (array, index) {
+                        (Value::List(list),Value::Int(idx)) => {
+                            let mut borrowed = list.borrow_mut();
+                            if idx < 0 || idx > borrowed.len() as i64 {
+                                panic!("Runtime error: Index out of bounds");
+                            }
+                            borrowed[idx as usize] = value;
+                        }
+                        _ => panic!("Runtime error: Invalid target for index assignment"),
+                    }
+                }
+                OpCode::Pop => { 
+                    self.stack.pop();
+                },
+                OpCode::And => {
+                    let b = self.stack.pop().expect("Stack empty");
+                    let a = self.stack.pop().expect("Stack empty");
+                    if let(Value::Bool(x), Value::Bool(y)) = (a,b) {
+                        self.stack.push(Value::Bool(x && y));
+                    } else { panic!("Runtime error: 'and' expects booleans"); }
+                }
+                OpCode::Or => {
+                    let b = self.stack.pop().expect("Stack empty");
+                    let a = self.stack.pop().expect("Stack empty");
+                    if let(Value::Bool(x), Value::Bool(y)) = (a,b) {
+                        self.stack.push(Value::Bool(x || y));
+                    } else { panic!("Runtime error: 'or' expects booleans"); }
+                }
+                OpCode::Not => {
+                    let a = self.stack.pop().expect("Stack empty");
+                    if let Value::Bool(x)  = a {
+                        self.stack.push(Value::Bool(!x));
+                    } else { panic!("Runtime error: 'not' expects a boolean"); }
+                }
+                OpCode::SetLocal(idx) => {
+                    let val = self.stack.pop().expect("Stack empty");
+                    self.stack[frame.stack_offset + idx] = val;
+                }
 
             }
         }
     }
+
 }

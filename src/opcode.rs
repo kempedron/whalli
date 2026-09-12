@@ -3,15 +3,15 @@ use crate::value::Value;
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
     Push(Value),
+    Pop,
     Add,
     Sub,
     Div,
     Mul,
-    Print,
     StoreGlobal(String),
     LoadGlobal(String),
-    // StorageLocal(String),
     LoadLocal(usize),
+    SetLocal(usize),
     Call(usize),
     Return,
     Equal,
@@ -22,4 +22,9 @@ pub enum OpCode {
     BuildList(usize),
     IndexGet,
     ListLen,
+    IndexSet,
+    And,
+    Or,
+    Not,
+    
 }

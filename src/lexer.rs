@@ -1,6 +1,5 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    Print,
     Let,
     Assign, // =
     Plus,
@@ -25,6 +24,9 @@ pub enum TokenKind {
     Return,
     If,
     Else,
+    And,
+    Or,
+    Not,
     Equal,
     Less, // <
     Greater, // >
@@ -33,6 +35,8 @@ pub enum TokenKind {
     RBracket, // ]
     For,
     In,
+    Break,
+    Continue,
     Eof,
 }
 #[derive(Debug, Clone)]
@@ -82,8 +86,14 @@ impl Lexer {
                     self.pos += 1;
                 }
                 '/' => {
-                    tokens.push(self.make_token(TokenKind::Slash));
-                    self.pos += 1;
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '/'{
+                        while self.pos < self.chars.len() && self.chars[self.pos] != '\n' {
+                            self.pos += 1;   
+                        }                    
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Slash));
+                        self.pos += 1;
+                    }
                 }
                 '=' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '='{
@@ -210,7 +220,6 @@ impl Lexer {
 
     fn ident_or_keyword(word: String) -> TokenKind {
         match word.as_str() {
-            "print" => TokenKind::Print,
             "let" => TokenKind::Let,
             "func" => TokenKind::Function,
             "return" => TokenKind::Return,
@@ -221,6 +230,11 @@ impl Lexer {
             "while" => TokenKind::While,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
+            "and" => TokenKind::And,
+            "or" => TokenKind::Or,
+            "not" => TokenKind::Not,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             _ => TokenKind::Identifier(word),
         }
     }

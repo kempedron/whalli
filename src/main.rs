@@ -5,6 +5,7 @@ mod ast;
 mod compiler;
 mod lexer;
 mod parser;
+pub mod stdlib;
 
 use lexer::Lexer;
 use parser::Parser;

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::{ast::{BinaryOp, Expr, Stmt}, lexer::{Token, TokenKind}, value::Value};
+use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, lexer::{Token, TokenKind}, value::Value};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -25,23 +25,14 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Stmt {
-        if self.match_token(TokenKind::Print){
-            self.consume(TokenKind::LParen, "Expected '(' after print");
-            
-            let mut exprs = Vec::new();
-            
-            if !self.check_token(TokenKind::RParen) {
-                loop {
-                    exprs.push(self.parse_expression());
-                    if !self.match_token(TokenKind::Comma){
-                        break;
-                    }
-                }
+
+        if self.match_token(TokenKind::LBrace) {
+            let mut stmts = Vec::new();
+            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+                stmts.push(self.parse_statement());
             }
-            
-            self.consume(TokenKind::RParen, "expected '(' after print args");
-            self.consume(TokenKind::Semicolon, "expected ';' after statement");
-            return Stmt::Print(exprs);
+            self.consume(TokenKind::RBrace, "Expected '}' after block");
+            return Stmt::Block(stmts);
         }
 
         if self.match_token(TokenKind::Let){
@@ -129,14 +120,58 @@ impl Parser {
             return Stmt::For { item: item_name, iterable, body };
         }
         
+        if self.match_token(TokenKind::Break) {
+            self.consume(TokenKind::Semicolon, "Expected ';' after 'break'");
+            return Stmt::Break;
+        }
+
+        if self.match_token(TokenKind::Continue) {
+            self.consume(TokenKind::Semicolon, "Expected ';' after 'continue'");
+            return Stmt::Continue;
+        }
 
         let expr = self.parse_expression();
+
+        if self.match_token(TokenKind::Assign) {
+            let value = self.parse_expression();
+            self.consume(TokenKind::Semicolon, "Expected ';' after assignment");
+
+            match expr {
+                Expr::Variable(name) => return Stmt::Assign(name, value),
+                Expr::Index(array, idx) => return Stmt::IndexAssign(*array, *idx, value),
+                _ => panic!("Parse error: Invalid assignment target"),
+            }
+        }
+
+
         self.consume(TokenKind::Semicolon,"Expected ';' after expression statement");
         return Stmt::Expr(expr);
     }
     
 
     fn parse_expression(&mut self) -> Expr {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Expr {
+        let mut left = self.parse_and();
+        while self.match_token(TokenKind::Or) {
+            let right = self.parse_and();
+            left = Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right)); 
+        }
+        left
+    }
+
+    fn parse_and(&mut self) -> Expr {
+        let mut left = self.parse_equality();
+        while self.match_token(TokenKind::And) {
+            let right = self.parse_equality();
+            left = Expr::Binary(Box::new(left), BinaryOp::And, Box::new(right))
+        }
+        left
+    }
+
+    fn parse_equality(&mut self) -> Expr {
         let mut left = self.parse_term();
         
         while self.match_token(TokenKind::Plus) 
@@ -177,6 +212,12 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
+
+        if self.match_token(TokenKind::Not) {
+            let expr = self.parse_primary();
+            return Expr::Unary(UnaryOp::Not, Box::new(expr));
+        }
+
         if self.match_token(TokenKind::LParen) {
             let expr = self.parse_expression();
             self.consume(TokenKind::RParen,"Expect closing bracket ')'");

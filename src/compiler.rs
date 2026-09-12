@@ -1,10 +1,22 @@
 use std::rc::Rc;
 
-use crate::{ast::{BinaryOp, Expr, Stmt}, opcode::OpCode, value::{FunctionObj, Value}};
+use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, opcode::OpCode, value::{FunctionObj, Value}};
 
+pub struct Local {
+    pub name: String,
+    pub depth: usize,
+}
+
+pub struct LoopState {
+    pub break_jumps: Vec<usize>,
+    pub continue_jumps: Vec<usize>,
+    pub local_count: usize,
+}
 pub struct Compiler {
     bytecode: Vec<OpCode>,
-    locals: Vec<String>,
+    locals: Vec<Local>,
+    scope_depth: usize,
+    loops: Vec<LoopState>,
 }
 
 impl Compiler {
@@ -12,7 +24,35 @@ impl Compiler {
         Compiler {
             bytecode: Vec::new(),
             locals: Vec::new(),
+            scope_depth: 0,
+            loops: Vec::new(),
         }
+    }
+
+    fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.scope_depth -= 1;
+
+        while let Some(local) = self.locals.last() {
+            if local.depth > self.scope_depth {
+                self.bytecode.push(OpCode::Pop);
+                self.locals.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn resolve_local(&self, name: &str) -> Option<usize>{
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if local.name == name {
+                return Some(i)
+            }
+        }
+        None
     }
 
     pub fn compile(mut self, stmts: &[Stmt]) -> Vec<OpCode>{
@@ -24,21 +64,21 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Print(exprs) => {
-                for expr in exprs {
-                    self.compile_expr(expr);
-                    self.bytecode.push(OpCode::Print);
-                }
-            }
             Stmt::Let(name,expr) => {
                 self.compile_expr(expr);
-                self.bytecode.push(OpCode::StoreGlobal(name.clone()));
+                if self.scope_depth > 0 {
+                    self.locals.push(Local { name: name.clone(), depth: self.scope_depth });
+                } else {
+                    self.bytecode.push(OpCode::StoreGlobal(name.clone()));
+                }
             }
             Stmt::Functions(name,params, body ) => {
                 let mut fn_compiler = Compiler::new();
+
+                fn_compiler.scope_depth = 1;
                 
                 for param in params {
-                    fn_compiler.locals.push(param.clone());
+                    fn_compiler.locals.push(Local { name: param.clone(), depth: 1 });
                 }
 
                 for stmt in body {
@@ -66,6 +106,7 @@ impl Compiler {
             }
             Stmt::Expr(expr) => {
                 self.compile_expr(expr);
+                self.bytecode.push(OpCode::Pop);
             }
             Stmt::If { condition, then_branch, else_branch } => {
                 self.compile_expr(condition);
@@ -101,14 +142,23 @@ impl Compiler {
                 let exit_jump_pos = self.bytecode.len();
                 self.bytecode.push(OpCode::JumpIfFalse(999));
 
+                self.loops.push(LoopState { break_jumps: vec![], continue_jumps: vec![], local_count: self.locals.len() });
+
+                self.begin_scope();
                 for stmt in body {
                     self.compile_stmt(stmt);
                 }
+                self.end_scope();
 
+                let continue_target = self.bytecode.len();
                 self.bytecode.push(OpCode::Jump(loop_start));
                 
                 let end_pos = self.bytecode.len();
                 self.bytecode[exit_jump_pos] = OpCode::JumpIfFalse(end_pos);
+            
+                let loop_state = self.loops.pop().unwrap();
+                for pos in loop_state.break_jumps { self.bytecode[pos] = OpCode::Jump(end_pos); }
+                for pos in loop_state.continue_jumps { self.bytecode[pos] = OpCode::Jump(continue_target); }
             }
             Stmt::For { item, iterable, body } => {
                 let loop_id = self.bytecode.len();
@@ -136,10 +186,21 @@ impl Compiler {
                 self.bytecode.push(OpCode::IndexGet);
                 self.bytecode.push(OpCode::StoreGlobal(item.clone()));
 
+                self.loops.push(LoopState { break_jumps: vec![], continue_jumps: vec![], local_count: self.locals.len() });
+
+                self.begin_scope();
+
+                self.bytecode.push(OpCode::LoadGlobal(arr_var.clone()));
+                self.bytecode.push(OpCode::LoadGlobal(idx_var.clone()));
+                self.bytecode.push(OpCode::IndexGet);
+                self.locals.push(Local { name: item.clone(), depth: self.scope_depth });
 
                 for stmt in body {
                     self.compile_stmt(stmt);
                 }
+                self.end_scope();
+
+                let continue_target = self.bytecode.len();
 
                 self.bytecode.push(OpCode::LoadGlobal(idx_var.clone()));
                 self.bytecode.push(OpCode::Push(Value::Int(1)));
@@ -151,6 +212,53 @@ impl Compiler {
                 let end_pos = self.bytecode.len();
                 self.bytecode[exit_pos] = OpCode::JumpIfFalse(end_pos);
 
+                let loop_state = self.loops.pop().unwrap();
+                for pos in loop_state.break_jumps { self.bytecode[pos] = OpCode::Jump(end_pos); }
+                for pos in loop_state.continue_jumps { self.bytecode[pos] = OpCode::Jump(continue_target); }
+                
+            }
+            Stmt::Assign(name, expr) => {
+                self.compile_expr(expr);
+                if let Some(idx) = self.resolve_local(name) {
+                    self.bytecode.push(OpCode::SetLocal(idx));
+                } else {
+                    self.bytecode.push(OpCode::StoreGlobal(name.clone()));
+                }
+            }
+            Stmt::IndexAssign(array, index, value ) => {
+                self.compile_expr(array);
+                self.compile_expr(index);
+                self.compile_expr(value);
+                self.bytecode.push(OpCode::IndexSet);
+            }
+            Stmt::Break => {
+                if let Some(loop_state) = self.loops.last_mut(){
+                    let pops = self.locals.len() - loop_state.local_count;
+                    for _ in 0..pops { self.bytecode.push(OpCode::Pop); }
+                    let jump_pos = self.bytecode.len();
+                    self.bytecode.push(OpCode::Jump(999));
+                    loop_state.break_jumps.push(jump_pos);
+                } else {
+                    panic!("Compiler error: 'break' outside of loop");
+                }
+            }
+            Stmt::Continue => {
+                if let Some(loop_state) = self.loops.last_mut(){
+                    let pops = self.locals.len() - loop_state.local_count;
+                    for _ in 0..pops { self.bytecode.push(OpCode::Pop); }
+                    let jump_pos = self.bytecode.len();
+                    self.bytecode.push(OpCode::Jump(999));
+                    loop_state.continue_jumps.push(jump_pos);
+                } else {
+                    panic!("Compiler error: 'continue' outside of loop");
+                }
+            }
+            Stmt::Block(stmts) => {
+                self.begin_scope();
+                for stmt in stmts {
+                    self.compile_stmt(stmt);
+                }
+                self.end_scope();
             }
         }
     }
@@ -172,10 +280,12 @@ impl Compiler {
                     BinaryOp::Equal => self.bytecode.push(OpCode::Equal),
                     BinaryOp::Greater => self.bytecode.push(OpCode::Greater),
                     BinaryOp::Less => self.bytecode.push(OpCode::Less),
+                    BinaryOp::And => self.bytecode.push(OpCode::And),
+                    BinaryOp::Or => self.bytecode.push(OpCode::Or),
                 }
             }
             Expr::Variable(name) => {
-                if let Some(idx) = self.locals.iter().position(|l| l == name){
+                if let Some(idx) = self.resolve_local(name) {
                     self.bytecode.push(OpCode::LoadLocal(idx));
                 } else {
                     self.bytecode.push(OpCode::LoadGlobal(name.clone()));                    
@@ -199,6 +309,12 @@ impl Compiler {
                 self.compile_expr(array);
                 self.compile_expr(index);
                 self.bytecode.push(OpCode::IndexGet);
+            }
+            Expr::Unary(op, right) => {
+                self.compile_expr(right);
+                match op {
+                    UnaryOp::Not => self.bytecode.push(OpCode::Not),
+                }
             }
          }
     }
