@@ -6,6 +6,7 @@ pub enum BinaryOp {
     Sub,
     Div,
     Mul,
+    Mod,
     Equal,
     Less,
     Greater,
@@ -24,8 +25,10 @@ pub enum Expr {
     Binary(Box<Expr>,BinaryOp, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     List(Vec<Expr>),
+    Map(Vec<(Expr, Expr)>),
     Index(Box<Expr>, Box<Expr>),
     Unary(UnaryOp, Box<Expr>),
+    MethodCall(Box<Expr>,String,Vec<Expr>),
 }
 
 #[derive(Debug)]

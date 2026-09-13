@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, ops::{Add, Div, Mul, Sub}, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt, ops::{Add, Div, Mul, Rem, Sub}, rc::Rc};
 
 use crate::opcode::OpCode;
 
@@ -19,6 +19,7 @@ pub enum Value {
     List(Rc<RefCell<Vec<Value>>>),
     Function(Rc<FunctionObj>),
     Native(fn(Vec<Value>) -> Value),
+    Map(Rc<RefCell<HashMap<String,  Value>>>),
 }
 
 impl Add for Value {
@@ -79,11 +80,49 @@ impl Div for Value {
 
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a/b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a/b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 / b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a / b as f64),
+            (Value::Int(a), Value::Int(b)) => {
+                if b == 0 { panic!("Runtime error: div by zero"); }
+                Value::Int(a / b)
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 { panic!("Runtime error: div by zero"); }
+                Value::Float(a / b)
+            },
+            (Value::Int(a), Value::Float(b)) => {
+                if b == 0.0 { panic!("Runtime error: div by zero"); }
+                Value::Float(a as f64 / b)
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if b == 0 { panic!("Runtime error: div by zero"); }
+                Value::Float(a / b as f64)
+            }
             _ => panic!("Runtime error: invalid types for Add"),
+
+        }
+    }
+}
+
+impl Rem for Value {
+    type Output = Value;
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Value::Int(a), Value::Int(b)) => {
+                if b == 0 { panic!("Runtime error: modulo by zero"); }
+                Value::Int(a % b)
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 { panic!("Runtime error: modulo by zero"); }
+                Value::Float(a % b)
+            },
+            (Value::Int(a), Value::Float(b)) => {
+                if b == 0.0 { panic!("Runtime error: modulo by zero"); }
+                Value::Float(a as f64 % b)
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if b == 0 { panic!("Runtime error: modulo by zero"); }
+                Value::Float(a % b as f64)
+            }
+            _ => panic!("Runtime error: invalid types for "),
 
         }
     }
@@ -128,8 +167,57 @@ impl fmt::Display for Value {
                 }
                 write!(f, "]")?;
                 Ok(())
+            },
+            Value::Map(map) => {
+                let borrowed = map.borrow();
+                let items: Vec<String> = borrowed.iter()
+                    .map(|(k,v)| format!("\"{}\": {:?}", k, v))
+                    .collect();
+                write!(f, "{{{}}}", items.join(", "))
             }
 
         }    
     }
+}
+
+impl Value {
+    pub fn call_method(&self, method_name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match (self, method_name) {
+            
+            // Arrays methods
+            (Value::List(list), "push") => {
+                if args.len() != 1 { return Err("'push' expects 1 argument".to_string()); }
+                list.borrow_mut().push(args[0].clone());
+                Ok(Value::Nil)
+            }
+            (Value::List(list), "pop") => {
+                if args.len() != 0 { return Err("'pop' expects 0 arguments".to_string()); }
+                let val = list.borrow_mut().pop().unwrap_or(Value::Nil);
+                Ok(val)
+            }
+            (Value::List(list), "len") => {
+                Ok(Value::Int(list.borrow().len() as i64))
+            }
+
+
+            // Map  methods
+            (Value::Map(map), "keys") => {
+                let keys: Vec<Value> = map.borrow().keys()
+                    .map(|k| Value::Str(Rc::new(k.clone())))
+                    .collect();
+                Ok(Value::List(Rc::new(std::cell::RefCell::new(keys))))
+            }
+            (Value::Map(map), "len") => {
+                Ok(Value::Int(map.borrow().len() as i64))
+            }
+
+            // Strings methods
+            (Value::Str(s), "len") => {
+                Ok(Value::Int(s.len() as i64))
+            }
+
+            _ => Err(format!("Method '{}' not found on this type", method_name))
+        }
+    }
+    
 }

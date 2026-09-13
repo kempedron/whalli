@@ -277,6 +277,7 @@ impl Compiler {
                     BinaryOp::Sub => self.bytecode.push(OpCode::Sub),
                     BinaryOp::Div => self.bytecode.push(OpCode::Div),
                     BinaryOp::Mul => self.bytecode.push(OpCode::Mul),
+                    BinaryOp::Mod => self.bytecode.push(OpCode::Mod),
                     BinaryOp::Equal => self.bytecode.push(OpCode::Equal),
                     BinaryOp::Greater => self.bytecode.push(OpCode::Greater),
                     BinaryOp::Less => self.bytecode.push(OpCode::Less),
@@ -298,6 +299,13 @@ impl Compiler {
                 }
                 self.bytecode.push(OpCode::Call(args.len()));
             }
+            Expr::MethodCall(obj, method_name, args) => {
+                self.compile_expr(obj);
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                self.bytecode.push(OpCode::MethodCall(method_name.clone(), args.len()));
+            }
             Expr::List(elements) => {
                 let len = elements.len();
                 for el in elements {
@@ -315,6 +323,14 @@ impl Compiler {
                 match op {
                     UnaryOp::Not => self.bytecode.push(OpCode::Not),
                 }
+            }
+            Expr::Map(entries) => {
+                let len = entries.len();
+                for (k,v) in entries {
+                    self.compile_expr(k);
+                    self.compile_expr(v);
+                }
+                self.bytecode.push(OpCode::BuildMap(len));
             }
          }
     }

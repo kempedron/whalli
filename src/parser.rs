@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, lexer::{Token, TokenKind}, value::Value};
+use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, value::Value, lexer::{Token, TokenKind, Lexer}};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -15,9 +15,36 @@ impl Parser {
     pub fn parse(&mut self) -> Vec<Stmt>{
         let mut statements = Vec::new();
         while !self.is_at_end(){
+            if self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon){
+                continue;
+            }
             statements.push(self.parse_statement());
         }
         statements
+    }
+
+    fn consume_stmt_end(&mut self) {
+        if self.is_at_end() || self.check_token(TokenKind::RBrace) {
+            return;
+        }
+        if self.match_token(TokenKind::Semicolon) || self.match_token(TokenKind::NewLine) {
+            while self.match_token(TokenKind::Semicolon) || self.match_token(TokenKind::NewLine) {}
+            return;
+        }
+        panic!("[Line {}] Parser: Expected newline or ';' at the end of statement", self.current_line());
+    }
+
+    fn parse_block(&mut self) -> Vec<Stmt> {
+        self.consume(TokenKind::LBrace, "Expected '{' before block");
+        let mut stmts = Vec::new();
+        while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+            if self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {
+                continue;
+            }
+            stmts.push(self.parse_statement());
+        }
+        self.consume(TokenKind::RBrace, "Expected '}' after block");
+        stmts
     }
 
     fn  current_line(&self) -> usize {
@@ -26,13 +53,8 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Stmt {
 
-        if self.match_token(TokenKind::LBrace) {
-            let mut stmts = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                stmts.push(self.parse_statement());
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after block");
-            return Stmt::Block(stmts);
+        if self.check_token(TokenKind::LBrace) {
+            return Stmt::Block(self.parse_block());
         }
 
         if self.match_token(TokenKind::Let){
@@ -43,7 +65,8 @@ impl Parser {
             };
             self.consume(TokenKind::Assign, "Parser: Expected '=' sign after variable name");
             let expr = self.parse_expression();
-            self.consume(TokenKind::Semicolon, "Parser: A semicolon ';' was expected after the expression");
+            self.consume_stmt_end();
+
 
             return Stmt::Let(name, expr);
         }
@@ -55,7 +78,6 @@ impl Parser {
                 _ => panic!("[Line {}] Expect function name after 'func'", self.current_line()),
             };
 
-            self.consume(TokenKind::LParen,"Expected '(' after function name");
             let mut params: Vec<String> = Vec::new();
             if !self.check_token(TokenKind::RParen) {
                 loop {
@@ -71,18 +93,13 @@ impl Parser {
             }
             self.consume(TokenKind::RParen, "Expected ')' after parameters");
 
-            self.consume(TokenKind::LBrace, "Expected '{' before function body");
-            let mut body = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end(){
-                body.push(self.parse_statement());
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after function body");
+            let body = self.parse_block();
             return Stmt::Functions(name, params, body);
         }
 
         if self.match_token(TokenKind::Return) {
             let expr = self.parse_expression();
-            self.consume(TokenKind::Semicolon, "Expected ';' after return value");
+            self.consume_stmt_end();
             return Stmt::Return(expr);
         }
 
@@ -92,12 +109,7 @@ impl Parser {
 
         if self.match_token(TokenKind::While) {
             let condition = self.parse_expression();
-            self.consume(TokenKind::LBrace, "Expected '{' after while condition");
-            let mut body = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                body.push(self.parse_statement());
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after while body");
+            let body = self.parse_block();
             return Stmt::While { condition, body };
         }
 
@@ -111,22 +123,17 @@ impl Parser {
             self.consume(TokenKind::In, "Expected 'in' after for variable");
             let iterable = self.parse_expression();
 
-            self.consume(TokenKind::LBrace, "Expected '{' before for body");
-            let mut body = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                body.push(self.parse_statement());
-            }
-            self.consume(TokenKind::RBrace,"Expected '}' after for body");
+            let body = self.parse_block();
             return Stmt::For { item: item_name, iterable, body };
         }
         
         if self.match_token(TokenKind::Break) {
-            self.consume(TokenKind::Semicolon, "Expected ';' after 'break'");
+            self.consume_stmt_end();
             return Stmt::Break;
         }
 
         if self.match_token(TokenKind::Continue) {
-            self.consume(TokenKind::Semicolon, "Expected ';' after 'continue'");
+            self.consume_stmt_end();
             return Stmt::Continue;
         }
 
@@ -134,7 +141,7 @@ impl Parser {
 
         if self.match_token(TokenKind::Assign) {
             let value = self.parse_expression();
-            self.consume(TokenKind::Semicolon, "Expected ';' after assignment");
+            self.consume_stmt_end();
 
             match expr {
                 Expr::Variable(name) => return Stmt::Assign(name, value),
@@ -143,8 +150,31 @@ impl Parser {
             }
         }
 
+        let op  = if self.match_token(TokenKind::PlusAssign) {Some(BinaryOp::Add)}
+            else if self.match_token(TokenKind::SubAssign) { Some(BinaryOp::Sub) }
+            else if self.match_token(TokenKind::MulAssign) {Some(BinaryOp::Mul)}
+            else if self.match_token(TokenKind::DivAssign) {Some(BinaryOp::Div)}
+            else if self.match_token(TokenKind::ModAssign) {Some(BinaryOp::Mod)}
+            else {None};
 
-        self.consume(TokenKind::Semicolon,"Expected ';' after expression statement");
+        if let Some(binary_op) = op {
+            let value = self.parse_expression();
+            self.consume_stmt_end();
+
+            match expr.clone() {
+                Expr::Variable(name) => {
+                    let new_expr = Expr::Binary(Box::new(expr), binary_op, Box::new(value));
+                    return Stmt::Assign(name, new_expr);
+                }
+                Expr::Index(arr, idx) => {
+                    let new_expr = Expr::Binary(Box::new(expr), binary_op, Box::new(value));
+                    return Stmt::IndexAssign(*arr, *idx, new_expr);
+                }
+                _ => panic!("Parse error: Invalid assignment target"),
+            }
+        }
+
+        self.consume_stmt_end();
         return Stmt::Expr(expr);
     }
     
@@ -198,12 +228,13 @@ impl Parser {
     fn parse_term(&mut self) -> Expr{
         let mut left = self.parse_primary();
 
-        while self.match_token(TokenKind::Star) || self.match_token(TokenKind::Slash){
+        while self.match_token(TokenKind::Mul) || self.match_token(TokenKind::Div) || self.match_token(TokenKind::Mod){
             let op_token = self.previous_token().clone();
             let right = self.parse_primary();
             let op = match op_token {
-                TokenKind::Star => BinaryOp::Mul,
-                TokenKind::Slash => BinaryOp::Div,
+                TokenKind::Mul => BinaryOp::Mul,
+                TokenKind::Div => BinaryOp::Div,
+                TokenKind::Mod => BinaryOp::Mod,
                 _ => unreachable!(),
             };
             left = Expr::Binary(Box::new(left), op, Box::new(right));
@@ -236,6 +267,31 @@ impl Parser {
             return Expr::List(elements);
         }
 
+        if self.match_token(TokenKind::LBrace) {
+            let mut entries = Vec::new();
+            if !self.check_token(TokenKind::RBrace) {
+                loop {
+                    while self.match_token(TokenKind::NewLine) {}
+
+                    if self.check_token(TokenKind::RBrace) { break; }
+
+                    let key = self.parse_expression();
+                    self.consume(TokenKind::Colon, "Expected ':' after map key");
+                    
+                    while self.match_token(TokenKind::NewLine) {}
+
+                    let val = self.parse_expression();
+                    entries.push((key, val));
+
+                    while self.match_token(TokenKind::NewLine) {}
+                    if !self.match_token(TokenKind::Comma) { break; }
+                }
+            }
+            while self.match_token(TokenKind::NewLine) {}
+            self.consume(TokenKind::RBrace, "Expected '}' after map");
+            return Expr::Map(entries);
+        }
+
         let token = self.advance().clone();
         let mut expr = match token {
             TokenKind::Str(s) => Expr::Literal(Value::Str(Rc::new(s))),
@@ -262,8 +318,28 @@ impl Parser {
                 let index = self.parse_expression();
                 self.consume(TokenKind::RBracket, "Expected ']' after index");
                 expr = Expr::Index(Box::new(expr), Box::new(index));
+            } else if self.match_token(TokenKind::Dot) {
+              let name_token  = self.advance().clone();
+              let prop_name = match  name_token {
+                  TokenKind::Identifier(n) => n,
+                  _ => panic!("[Line {}] Expected property name after .", self.current_line()),
+              };
+              if self.match_token(TokenKind::LParen) {
+                let mut args = Vec::new();
+                if !self.check_token(TokenKind::RParen){
+                    loop {
+                        args.push(self.parse_expression());
+                        if !self.match_token(TokenKind::Comma)  { break ;}
+                    }
+                }
+                self.consume(TokenKind::RParen, "Expected ')' after arguments");
+                expr = Expr::MethodCall(Box::new(expr), prop_name, args);
+              } else {
+                    let string_key = Expr::Literal(Value::Str(Rc::new(prop_name)));
+                    expr = Expr::Index(Box::new(expr), Box::new(string_key));
+              }
             } else {
-                break; // Нет ни `(`, ни `[`
+                break;
             }
         }
         
@@ -285,13 +361,22 @@ impl Parser {
                     current_literal = String::new();
                 }
                 i += 1;
-                let mut var_name = String::new();
+                let mut expr_str = String::new();
                 while i <  chars.len() && chars[i] != '}' {
-                    var_name.push(chars[i]);
+                    expr_str.push(chars[i]);
                     i += 1;
                 }
                 if i < chars.len() { i += 1; }
-                parts.push(Expr::Variable(var_name.trim().to_string()));
+
+                let code_inside = expr_str.trim();
+                if !code_inside.is_empty(){
+                    let mut sub_lexer = Lexer::new(code_inside);
+                    let tokens = sub_lexer.tokenize();
+                    let mut sub_parser = Parser::new(tokens);
+
+                    let expr = sub_parser.parse_expression();
+                    parts.push(expr);
+                }
             } else {
                 current_literal.push(chars[i]);
                 i += 1
@@ -321,33 +406,17 @@ impl Parser {
     fn parse_if(&mut self) -> Stmt {
             let condition = self.parse_expression();
 
-            self.consume(TokenKind::LBrace, "Expected '{' after if condition");
-            let mut then_branch = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                then_branch.push(self.parse_statement());
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after if block");
+            let then_branch = self.parse_block();
 
-            let else_branch = if self.match_token(TokenKind::Else) {
-
-                if self.match_token(TokenKind::If){
-                    Some(vec![self.parse_if()])
-                } else {
-                    self.consume(TokenKind::LBrace, "Expected '{' after else");
-                    let mut branch = Vec::new();
-                    
-                    while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                        branch.push(self.parse_statement());
-                    }
-                    
-                    self.consume(TokenKind::RBrace, "Expected '}' after else block");
-                    Some(branch)
-                }
-
-                
+        let else_branch = if self.match_token(TokenKind::Else) {
+            if self.match_token(TokenKind::If){
+                Some(vec![self.parse_if()])
             } else {
-                None
-            };
+                Some(self.parse_block())
+            }
+        } else {
+            None
+        };
 
             return Stmt::If { condition, then_branch, else_branch }
 

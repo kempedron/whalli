@@ -1,5 +1,5 @@
 use crate::{opcode::OpCode, value::{FunctionObj, Value}};
-use std::{collections::HashMap, process::id, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 
 pub struct CallFrame {
@@ -57,7 +57,6 @@ impl VM {
                 OpCode::Push(val) => {
                     self.stack.push(val.clone());
                 }
-
                 OpCode::Add => {
                     let b = self.stack.pop().expect("Error: stack empty");
                     let a = self.stack.pop().expect("Error: stack empty");
@@ -77,6 +76,11 @@ impl VM {
                     let b = self.stack.pop().expect("Error: stack empty");
                     let a = self.stack.pop().expect("Error: stack empty");
                     self.stack.push(a/b);
+                }
+                OpCode::Mod => {
+                    let b = self.stack.pop().expect("Error: stack empty");
+                    let a = self.stack.pop().expect("Error: stack empty");
+                    self.stack.push(a % b);
                 }
                 OpCode::StoreGlobal(name) => {
                     let val = self.stack.pop().expect("Error: stack empty for assignment");
@@ -198,6 +202,11 @@ impl VM {
                             }
                             self.stack.push(borrowed[idx as usize].clone());
                         }
+                        (Value::Map(map), Value::Str(key)) => {
+                            let borrowed = map.borrow();
+                            let val = borrowed.get(&*key).unwrap_or(&Value::Nil);
+                            self.stack.push(val.clone());
+                        }
                         _ => panic!("Runtime error: Invalid array or index"),
                     }
                 }
@@ -213,6 +222,10 @@ impl VM {
                                 panic!("Runtime error: Index out of bounds");
                             }
                             borrowed[idx as usize] = value;
+                        }
+                        (Value::Map(map), Value::Str(key)) => {
+                            let mut borrowed = map.borrow_mut(); 
+                            borrowed.insert((*key).clone(), value);
                         }
                         _ => panic!("Runtime error: Invalid target for index assignment"),
                     }
@@ -244,9 +257,35 @@ impl VM {
                     let val = self.stack.pop().expect("Stack empty");
                     self.stack[frame.stack_offset + idx] = val;
                 }
+                OpCode::BuildMap(size) => {
+                    let mut map = HashMap::new();
+
+                    for _ in 0..size {
+                        let val = self.stack.pop().unwrap();
+                        let key = self.stack.pop().unwrap();
+
+                        let  key_str = match key {
+                            Value::Str(s) => (*s).clone(),
+                            _ => panic!("Runtime error: Map keys must be strings"),
+                        };
+                        map.insert(key_str, val);
+                    }
+                    self.stack.push(Value::Map(Rc::new(RefCell::new(map))));
+                }
+                OpCode::MethodCall(method_name, arg_count) => {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _  in 0..arg_count {
+                        args.push(self.stack.pop().unwrap());
+                    }
+                    args.reverse();
+                    let obj = self.stack.pop().unwrap();
+                    match obj.call_method(&method_name, args) {
+                        Ok(result) => self.stack.push(result),
+                        Err(err_msg) => panic!("Runtime error: {}", err_msg),
+                    }
+                }
 
             }
         }
     }
-
 }

@@ -4,12 +4,21 @@ pub enum TokenKind {
     Assign, // =
     Plus,
     Sub,
-    Star,
-    Slash,
+    Mul,
+    Div,
+    Mod,
+    PlusAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    ModAssign,
     LParen, // (
     RParen, // )
     Semicolon, // ;
+    NewLine, // \n
     Comma, // ,
+    Colon, // :
+    Dot, // .
     Float(f64),
     Int(i64),
     True,
@@ -49,11 +58,12 @@ pub struct Lexer {
     chars: Vec<char>,
     pos: usize,
     line: usize,
+    nesting: usize,
 }
 
 impl Lexer {
     pub fn new(input: &str) -> Self {
-        Lexer { chars: input.chars().collect(), pos: 0, line: 1 }
+        Lexer { chars: input.chars().collect(), pos: 0, line: 1, nesting: 0 }
     }
 
     fn make_token(&self, kind: TokenKind) -> Token {
@@ -71,27 +81,92 @@ impl Lexer {
                 '\n' => {
                     self.pos += 1;
                     self.line += 1;
-                },
-
-                '+' => {
-                    tokens.push(self.make_token(TokenKind::Plus));
+                    if self.nesting == 0 {
+                        tokens.push(self.make_token(TokenKind::NewLine));
+                    }
+                }
+                '(' => {
+                    tokens.push(self.make_token(TokenKind::LParen));
+                    self.nesting += 1;
                     self.pos += 1;
+                }
+                ')' => {
+                    tokens.push(self.make_token(TokenKind::RParen));
+                    if self.nesting > 0 { self.nesting -= 1;}
+                    self.pos += 1;
+                }
+                '{' => {
+                    tokens.push(self.make_token(TokenKind::LBrace));
+                    self.pos += 1;
+                }
+                '}' => {
+                    tokens.push(self.make_token(TokenKind::RBrace));
+                    self.pos += 1;
+                }
+                '[' => {
+                    tokens.push(self.make_token(TokenKind::LBracket));
+                    self.nesting += 1;
+                    self.pos += 1;
+                }
+                ']' => {
+                    tokens.push(self.make_token(TokenKind::RBracket));
+                    if self.nesting > 0 { self.nesting -= 1;}
+                    self.pos += 1;
+                }
+                ':'  => {
+                    tokens.push(self.make_token(TokenKind::Colon));
+                    self.pos += 1;
+                }
+                '.' => {
+                    tokens.push(self.make_token(TokenKind::Dot));
+                    self.pos += 1;
+                }
+                '+' => {
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::PlusAssign));
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Plus));
+                        self.pos += 1;
+                    }
                 }
                 '*' => {
-                    tokens.push(self.make_token(TokenKind::Star));
-                    self.pos += 1;
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::MulAssign));
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Mul));
+                        self.pos += 1;
+                    }
                 }
                 '-' => {
-                    tokens.push(self.make_token(TokenKind::Sub));
-                    self.pos += 1;
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::SubAssign));
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Sub));
+                        self.pos += 1;
+                    }
                 }
                 '/' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '/'{
                         while self.pos < self.chars.len() && self.chars[self.pos] != '\n' {
                             self.pos += 1;   
                         }                    
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::DivAssign));
                     } else {
-                        tokens.push(self.make_token(TokenKind::Slash));
+                        tokens.push(self.make_token(TokenKind::Div));
+                        self.pos += 1;
+                    }
+                }
+                '%' => {
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::ModAssign));
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Mod));
                         self.pos += 1;
                     }
                 }
@@ -118,30 +193,6 @@ impl Lexer {
                 }
                 ',' => {
                     tokens.push(self.make_token(TokenKind::Comma));
-                    self.pos += 1;
-                }
-                '(' => {
-                    tokens.push(self.make_token(TokenKind::LParen));
-                    self.pos += 1;
-                }
-                ')' => {
-                    tokens.push(self.make_token(TokenKind::RParen));
-                    self.pos += 1;
-                }
-                '{' => {
-                    tokens.push(self.make_token(TokenKind::LBrace));
-                    self.pos += 1;
-                }
-                '}' => {
-                    tokens.push(self.make_token(TokenKind::RBrace));
-                    self.pos += 1;
-                }
-                '[' => {
-                    tokens.push(self.make_token(TokenKind::LBracket));
-                    self.pos += 1;
-                }
-                ']' => {
-                    tokens.push(self.make_token(TokenKind::RBracket));
                     self.pos += 1;
                 }
                 'f' => {
@@ -243,8 +294,14 @@ impl Lexer {
         let mut num_str = String::new();
         let mut is_float = false;
         
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.'){
+        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.' || self.chars[self.pos] == '_'){
             let ch = self.chars[self.pos];
+            
+            if ch == '_' {
+                self.pos += 1;
+                continue;
+            }
+
             if ch == '.' {
                 is_float = true;
             }

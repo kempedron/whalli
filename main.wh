@@ -1,9 +1,7 @@
-let x = "Глобальная";
-println("До: ", x);
-
-{
-    let x = "Локальная в блоке";
-    println("Внутри блока: ", x);
-} 
-
-println("После блока: ", x); // Должно вывести "Глобальная"
+let dict = {
+    "name": "Alice",
+    "age": 32,
+}
+println(dict)
+println(f"DATA:\nname:{dict.name}\nage:{dict.age}")
+println(f"Через год ей будет {dict.age + 1}!")
