@@ -2,6 +2,11 @@ use std::rc::Rc;
 
 use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, value::Value, lexer::{Token, TokenKind, Lexer}};
 
+pub struct ParseError {
+    pub message: String,
+    pub line: usize,
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -12,70 +17,81 @@ impl Parser {
         Parser { tokens, pos: 0 }
     }
 
-    pub fn parse(&mut self) -> Vec<Stmt>{
-        let mut statements = Vec::new();
-        while !self.is_at_end(){
-            if self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon){
-                continue;
-            }
-            statements.push(self.parse_statement());
+    fn error(&self, message: &str) -> ParseError {
+        ParseError {
+            message: message.to_string(),
+            line: self.current_line(),
         }
-        statements
     }
 
-    fn consume_stmt_end(&mut self) {
+    pub fn parse(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut statements = Vec::new();
+        while !self.is_at_end() {
+            if self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {
+                continue;
+            }
+            statements.push(Stmt::Line(self.current_line()));
+            statements.push(self.parse_statement()?);
+        }
+        Ok(statements)
+    }
+
+    fn consume_stmt_end(&mut self) -> Result<(), ParseError> {
         if self.is_at_end() || self.check_token(TokenKind::RBrace) {
-            return;
+            return Ok(());
         }
         if self.match_token(TokenKind::Semicolon) || self.match_token(TokenKind::NewLine) {
             while self.match_token(TokenKind::Semicolon) || self.match_token(TokenKind::NewLine) {}
-            return;
+            return Ok(());
         }
-        panic!("[Line {}] Parser: Expected newline or ';' at the end of statement", self.current_line());
+        Err(self.error("Expected newline or ';' at the end of statement"))
     }
 
-    fn parse_block(&mut self) -> Vec<Stmt> {
-        self.consume(TokenKind::LBrace, "Expected '{' before block");
+    fn parse_block(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        self.consume(TokenKind::LBrace, "Expected '{' before block")?;
         let mut stmts = Vec::new();
         while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
             if self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {
                 continue;
             }
-            stmts.push(self.parse_statement());
+            stmts.push(Stmt::Line(self.current_line()));
+            stmts.push(self.parse_statement()?);
         }
-        self.consume(TokenKind::RBrace, "Expected '}' after block");
-        stmts
+        self.consume(TokenKind::RBrace, "Expected '}' after block")?;
+        Ok(stmts)
     }
 
-    fn  current_line(&self) -> usize {
-        self.tokens[self.pos].line
+    fn current_line(&self) -> usize {
+        if self.pos < self.tokens.len() {
+            self.tokens[self.pos].line
+        } else {
+            self.tokens.last().map_or(1, |t| t.line)
+        }
     }
 
-    fn parse_statement(&mut self) -> Stmt {
-
+    fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
         if self.check_token(TokenKind::LBrace) {
-            return Stmt::Block(self.parse_block());
+            return Ok(Stmt::Block(self.parse_block()?));
         }
 
-        if self.match_token(TokenKind::Let){
+        if self.match_token(TokenKind::Let) {
             let name_token = self.advance().clone();
             let name = match name_token {
                 TokenKind::Identifier(n) => n,
-                _ => panic!("[Line {}] Expect var name after 'let'",self.current_line())
+                _ => return Err(self.error("Expect var name after 'let'")),
             };
-            self.consume(TokenKind::Assign, "Parser: Expected '=' sign after variable name");
-            let expr = self.parse_expression();
-            self.consume_stmt_end();
+            self.consume(TokenKind::Assign, "Expected '=' sign after variable name")?;
+            let expr = self.parse_expression()?;
+            self.consume_stmt_end()?;
 
-
-            return Stmt::Let(name, expr);
+            return Ok(Stmt::Let(name, expr));
         }
 
         if self.match_token(TokenKind::Function) {
             let name_token = self.advance().clone();
-            let name = match name_token{
+            let name = match name_token {
                 TokenKind::Identifier(n) => n,
-                _ => panic!("[Line {}] Expect function name after 'func'", self.current_line()),
+                _ => return Err(self.error("Expect function name after 'func'")),
             };
 
             let mut params: Vec<String> = Vec::new();
@@ -84,23 +100,23 @@ impl Parser {
                     let param_token = self.advance().clone();
                     match param_token {
                         TokenKind::Identifier(n) => params.push(n),
-                        _ => panic!("[Line {}] Expect parameter name", self.current_line()),
+                        _ => return Err(self.error("Expect parameter name")),
                     }
-                    if !self.match_token(TokenKind::Comma){
+                    if !self.match_token(TokenKind::Comma) {
                         break;
                     }
                 }
             }
-            self.consume(TokenKind::RParen, "Expected ')' after parameters");
+            self.consume(TokenKind::RParen, "Expected ')' after parameters")?;
 
-            let body = self.parse_block();
-            return Stmt::Functions(name, params, body);
+            let body = self.parse_block()?;
+            return Ok(Stmt::Functions(name, params, body));
         }
 
         if self.match_token(TokenKind::Return) {
-            let expr = self.parse_expression();
-            self.consume_stmt_end();
-            return Stmt::Return(expr);
+            let expr = self.parse_expression()?;
+            self.consume_stmt_end()?;
+            return Ok(Stmt::Return(expr));
         }
 
         if self.match_token(TokenKind::If) {
@@ -108,101 +124,110 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::While) {
-            let condition = self.parse_expression();
-            let body = self.parse_block();
-            return Stmt::While { condition, body };
+            let condition = self.parse_expression()?;
+            let body = self.parse_block()?;
+            return Ok(Stmt::While { condition, body });
         }
 
         if self.match_token(TokenKind::For) {
             let item_token = self.advance().clone();
             let item_name = match item_token {
                 TokenKind::Identifier(n) => n,
-                _ => panic!("Expected variable name after for"),
+                _ => return Err(self.error("Expected variable name after for")),
             };
 
-            self.consume(TokenKind::In, "Expected 'in' after for variable");
-            let iterable = self.parse_expression();
+            self.consume(TokenKind::In, "Expected 'in' after for variable")?;
+            let iterable = self.parse_expression()?;
 
-            let body = self.parse_block();
-            return Stmt::For { item: item_name, iterable, body };
+            let body = self.parse_block()?;
+            return Ok(Stmt::For { item: item_name, iterable, body });
         }
         
         if self.match_token(TokenKind::Break) {
-            self.consume_stmt_end();
-            return Stmt::Break;
+            self.consume_stmt_end()?;
+            return Ok(Stmt::Break);
         }
 
         if self.match_token(TokenKind::Continue) {
-            self.consume_stmt_end();
-            return Stmt::Continue;
+            self.consume_stmt_end()?;
+            return Ok(Stmt::Continue);
         }
 
-        let expr = self.parse_expression();
+        if self.match_token(TokenKind::Import) {
+            let name_token = self.advance().clone();
+            let module_name = match name_token {
+                TokenKind::Identifier(n) => n,
+                _ => return Err(self.error("Expected module name after 'import'")),
+            };
+            self.consume_stmt_end()?;
+            return Ok(Stmt::Import(module_name));
+        }
+
+        let expr = self.parse_expression()?;
 
         if self.match_token(TokenKind::Assign) {
-            let value = self.parse_expression();
-            self.consume_stmt_end();
+            let value = self.parse_expression()?;
+            self.consume_stmt_end()?;
 
-            match expr {
-                Expr::Variable(name) => return Stmt::Assign(name, value),
-                Expr::Index(array, idx) => return Stmt::IndexAssign(*array, *idx, value),
-                _ => panic!("Parse error: Invalid assignment target"),
-            }
+            return match expr {
+                Expr::Variable(name) => Ok(Stmt::Assign(name, value)),
+                Expr::Index(array, idx) => Ok(Stmt::IndexAssign(*array, *idx, value)),
+                _ => Err(self.error("Invalid assignment target")),
+            };
         }
 
-        let op  = if self.match_token(TokenKind::PlusAssign) {Some(BinaryOp::Add)}
+        let op = if self.match_token(TokenKind::PlusAssign) { Some(BinaryOp::Add) }
             else if self.match_token(TokenKind::SubAssign) { Some(BinaryOp::Sub) }
-            else if self.match_token(TokenKind::MulAssign) {Some(BinaryOp::Mul)}
-            else if self.match_token(TokenKind::DivAssign) {Some(BinaryOp::Div)}
-            else if self.match_token(TokenKind::ModAssign) {Some(BinaryOp::Mod)}
-            else {None};
+            else if self.match_token(TokenKind::MulAssign) { Some(BinaryOp::Mul) }
+            else if self.match_token(TokenKind::DivAssign) { Some(BinaryOp::Div) }
+            else if self.match_token(TokenKind::ModAssign) { Some(BinaryOp::Mod) }
+            else { None };
 
         if let Some(binary_op) = op {
-            let value = self.parse_expression();
-            self.consume_stmt_end();
+            let value = self.parse_expression()?;
+            self.consume_stmt_end()?;
 
-            match expr.clone() {
+            return match expr.clone() {
                 Expr::Variable(name) => {
                     let new_expr = Expr::Binary(Box::new(expr), binary_op, Box::new(value));
-                    return Stmt::Assign(name, new_expr);
+                    Ok(Stmt::Assign(name, new_expr))
                 }
                 Expr::Index(arr, idx) => {
                     let new_expr = Expr::Binary(Box::new(expr), binary_op, Box::new(value));
-                    return Stmt::IndexAssign(*arr, *idx, new_expr);
+                    Ok(Stmt::IndexAssign(*arr, *idx, new_expr))
                 }
-                _ => panic!("Parse error: Invalid assignment target"),
-            }
+                _ => Err(self.error("Invalid assignment target")),
+            };
         }
 
-        self.consume_stmt_end();
-        return Stmt::Expr(expr);
+        self.consume_stmt_end()?;
+        Ok(Stmt::Expr(expr))
     }
     
-
-    fn parse_expression(&mut self) -> Expr {
+    fn parse_expression(&mut self) -> Result<Expr, ParseError> {
         self.parse_or()
     }
 
-    fn parse_or(&mut self) -> Expr {
-        let mut left = self.parse_and();
+    fn parse_or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_and()?;
         while self.match_token(TokenKind::Or) {
-            let right = self.parse_and();
+            let right = self.parse_and()?;
             left = Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right)); 
         }
-        left
+        Ok(left)
     }
 
-    fn parse_and(&mut self) -> Expr {
-        let mut left = self.parse_equality();
+    fn parse_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_equality()?;
         while self.match_token(TokenKind::And) {
-            let right = self.parse_equality();
+            let right = self.parse_equality()?;
             left = Expr::Binary(Box::new(left), BinaryOp::And, Box::new(right))
         }
-        left
+        Ok(left)
     }
 
-    fn parse_equality(&mut self) -> Expr {
-        let mut left = self.parse_term();
+    fn parse_equality(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_term()?;
         
         while self.match_token(TokenKind::Plus) 
             || self.match_token(TokenKind::Sub)
@@ -211,7 +236,7 @@ impl Parser {
             || self.match_token(TokenKind::Greater)
         {
             let op_token = self.previous_token().clone();
-            let right = self.parse_term();
+            let right = self.parse_term()?;
             let op = match op_token {
                 TokenKind::Plus => BinaryOp::Add,
                 TokenKind::Sub => BinaryOp::Sub,
@@ -222,15 +247,15 @@ impl Parser {
             };
             left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
-        left
+        Ok(left)
     }
 
-    fn parse_term(&mut self) -> Expr{
-        let mut left = self.parse_primary();
+    fn parse_term(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_primary()?;
 
-        while self.match_token(TokenKind::Mul) || self.match_token(TokenKind::Div) || self.match_token(TokenKind::Mod){
+        while self.match_token(TokenKind::Mul) || self.match_token(TokenKind::Div) || self.match_token(TokenKind::Mod) {
             let op_token = self.previous_token().clone();
-            let right = self.parse_primary();
+            let right = self.parse_primary()?;
             let op = match op_token {
                 TokenKind::Mul => BinaryOp::Mul,
                 TokenKind::Div => BinaryOp::Div,
@@ -239,32 +264,31 @@ impl Parser {
             };
             left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
-        left
+        Ok(left)
     }
 
-    fn parse_primary(&mut self) -> Expr {
-
+    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         if self.match_token(TokenKind::Not) {
-            let expr = self.parse_primary();
-            return Expr::Unary(UnaryOp::Not, Box::new(expr));
+            let expr = self.parse_primary()?;
+            return Ok(Expr::Unary(UnaryOp::Not, Box::new(expr)));
         }
 
         if self.match_token(TokenKind::LParen) {
-            let expr = self.parse_expression();
-            self.consume(TokenKind::RParen,"Expect closing bracket ')'");
-            return expr
+            let expr = self.parse_expression()?;
+            self.consume(TokenKind::RParen, "Expect closing bracket ')'")?;
+            return Ok(expr);
         }
        
         if self.match_token(TokenKind::LBracket) {
             let mut elements = Vec::new();
             if !self.check_token(TokenKind::RBracket) {
                 loop {
-                    elements.push(self.parse_expression());
+                    elements.push(self.parse_expression()?);
                     if !self.match_token(TokenKind::Comma) { break; }
                 }
             }
-            self.consume(TokenKind::RBracket, "Expected ']' after list elements");
-            return Expr::List(elements);
+            self.consume(TokenKind::RBracket, "Expected ']' after list elements")?;
+            return Ok(Expr::List(elements));
         }
 
         if self.match_token(TokenKind::LBrace) {
@@ -272,15 +296,14 @@ impl Parser {
             if !self.check_token(TokenKind::RBrace) {
                 loop {
                     while self.match_token(TokenKind::NewLine) {}
-
                     if self.check_token(TokenKind::RBrace) { break; }
 
-                    let key = self.parse_expression();
-                    self.consume(TokenKind::Colon, "Expected ':' after map key");
+                    let key = self.parse_expression()?;
+                    self.consume(TokenKind::Colon, "Expected ':' after map key")?;
                     
                     while self.match_token(TokenKind::NewLine) {}
 
-                    let val = self.parse_expression();
+                    let val = self.parse_expression()?;
                     entries.push((key, val));
 
                     while self.match_token(TokenKind::NewLine) {}
@@ -288,93 +311,99 @@ impl Parser {
                 }
             }
             while self.match_token(TokenKind::NewLine) {}
-            self.consume(TokenKind::RBrace, "Expected '}' after map");
-            return Expr::Map(entries);
+            self.consume(TokenKind::RBrace, "Expected '}' after map")?;
+            return Ok(Expr::Map(entries));
         }
 
         let token = self.advance().clone();
         let mut expr = match token {
             TokenKind::Str(s) => Expr::Literal(Value::Str(Rc::new(s))),
-            TokenKind::FStr(s) => Self::parse_interpolated_string(&s),
+            TokenKind::FStr(s) => self.parse_interpolated_string(&s)?,
             TokenKind::Int(n) => Expr::Literal(Value::Int(n)),
             TokenKind::Float(n) => Expr::Literal(Value::Float(n)),
             TokenKind::True => Expr::Literal(Value::Bool(true)),
             TokenKind::False => Expr::Literal(Value::Bool(false)),
             TokenKind::Identifier(name) => Expr::Variable(name),
-            _ => panic!("[Line {}] Parser: expect expression, got {:?}", self.current_line(), token),
+            _ => return Err(self.error(&format!("Expect expression, got {:?}", token))),
         };
+
         loop {
             if self.match_token(TokenKind::LParen) {
                 let mut args = Vec::new();
                 if !self.check_token(TokenKind::RParen) {
                     loop {
-                        args.push(self.parse_expression());
+                        args.push(self.parse_expression()?);
                         if !self.match_token(TokenKind::Comma) { break; }
                     }
                 }
-                self.consume(TokenKind::RParen, "Expected ')' after arguments");
+                self.consume(TokenKind::RParen, "Expected ')' after arguments")?;
                 expr = Expr::Call(Box::new(expr), args);
             } else if self.match_token(TokenKind::LBracket) {
-                let index = self.parse_expression();
-                self.consume(TokenKind::RBracket, "Expected ']' after index");
+                let index = self.parse_expression()?;
+                self.consume(TokenKind::RBracket, "Expected ']' after index")?;
                 expr = Expr::Index(Box::new(expr), Box::new(index));
             } else if self.match_token(TokenKind::Dot) {
-              let name_token  = self.advance().clone();
-              let prop_name = match  name_token {
-                  TokenKind::Identifier(n) => n,
-                  _ => panic!("[Line {}] Expected property name after .", self.current_line()),
-              };
-              if self.match_token(TokenKind::LParen) {
-                let mut args = Vec::new();
-                if !self.check_token(TokenKind::RParen){
-                    loop {
-                        args.push(self.parse_expression());
-                        if !self.match_token(TokenKind::Comma)  { break ;}
+                let name_token = self.advance().clone();
+                let prop_name = match name_token {
+                    TokenKind::Identifier(n) => n,
+                    _ => return Err(self.error("Expected property name after '.'")),
+                };
+                if self.match_token(TokenKind::LParen) {
+                    let mut args = Vec::new();
+                    if !self.check_token(TokenKind::RParen) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if !self.match_token(TokenKind::Comma) { break; }
+                        }
                     }
-                }
-                self.consume(TokenKind::RParen, "Expected ')' after arguments");
-                expr = Expr::MethodCall(Box::new(expr), prop_name, args);
-              } else {
+                    self.consume(TokenKind::RParen, "Expected ')' after arguments")?;
+                    expr = Expr::MethodCall(Box::new(expr), prop_name, args);
+                } else {
                     let string_key = Expr::Literal(Value::Str(Rc::new(prop_name)));
                     expr = Expr::Index(Box::new(expr), Box::new(string_key));
-              }
+                }
             } else {
                 break;
             }
         }
         
-        expr
+        Ok(expr)
     }
-    
 
-    fn parse_interpolated_string(s: &str) -> Expr {
+    fn parse_interpolated_string(&self, s: &str) -> Result<Expr, ParseError> {
         let mut parts: Vec<Expr> = Vec::new();
         let chars: Vec<char> = s.chars().collect();
-        let mut i =0;
+        let mut i = 0;
 
         let mut current_literal = String::new();
 
         while i < chars.len() {
-            if chars[i] == '{'  {
-                if !current_literal.is_empty(){
+            if chars[i] == '{' {
+                if !current_literal.is_empty() {
                     parts.push(Expr::Literal(Value::Str(Rc::new(current_literal))));
                     current_literal = String::new();
                 }
                 i += 1;
                 let mut expr_str = String::new();
-                while i <  chars.len() && chars[i] != '}' {
+                while i < chars.len() && chars[i] != '}' {
                     expr_str.push(chars[i]);
                     i += 1;
                 }
                 if i < chars.len() { i += 1; }
 
                 let code_inside = expr_str.trim();
-                if !code_inside.is_empty(){
+                if !code_inside.is_empty() {
                     let mut sub_lexer = Lexer::new(code_inside);
-                    let tokens = sub_lexer.tokenize();
+                    let tokens = sub_lexer.tokenize().map_err(|e| ParseError {
+                        message: format!("In f-string: {}", e.message),
+                        line: self.current_line(),
+                    })?;
                     let mut sub_parser = Parser::new(tokens);
 
-                    let expr = sub_parser.parse_expression();
+                    let expr = sub_parser.parse_expression().map_err(|e| ParseError {
+                        message: format!("In f-string: {}", e.message),
+                        line: self.current_line(),
+                    })?;
                     parts.push(expr);
                 }
             } else {
@@ -382,12 +411,12 @@ impl Parser {
                 i += 1
             }
         }
-        if !current_literal.is_empty(){
+        if !current_literal.is_empty() {
             parts.push(Expr::Literal(Value::Str(Rc::new(current_literal))));
         }
 
-        if parts.is_empty(){
-            return Expr::Literal(Value::Str(Rc::new("".to_string())));
+        if parts.is_empty() {
+            return Ok(Expr::Literal(Value::Str(Rc::new("".to_string()))));
         }
 
         let mut expr = parts[0].clone();
@@ -398,28 +427,24 @@ impl Parser {
                 Box::new(next_part)
             );
         }
-        expr
-
-
+        Ok(expr)
     }
 
-    fn parse_if(&mut self) -> Stmt {
-            let condition = self.parse_expression();
-
-            let then_branch = self.parse_block();
+    fn parse_if(&mut self) -> Result<Stmt, ParseError> {
+        let condition = self.parse_expression()?;
+        let then_branch = self.parse_block()?;
 
         let else_branch = if self.match_token(TokenKind::Else) {
-            if self.match_token(TokenKind::If){
-                Some(vec![self.parse_if()])
+            if self.match_token(TokenKind::If) {
+                Some(vec![self.parse_if()?])
             } else {
-                Some(self.parse_block())
+                Some(self.parse_block()?)
             }
         } else {
             None
         };
 
-            return Stmt::If { condition, then_branch, else_branch }
-
+        Ok(Stmt::If { condition, then_branch, else_branch })
     }
 
     fn current_token(&self) -> &TokenKind {
@@ -435,7 +460,7 @@ impl Parser {
     }
 
     fn advance(&mut self) -> &TokenKind {
-        if !self.is_at_end(){
+        if !self.is_at_end() {
             self.pos += 1;
         }
         &self.tokens[self.pos - 1].kind
@@ -450,15 +475,15 @@ impl Parser {
         }
     }
 
-    fn consume(&mut self, expected: TokenKind, err_msg: &str) {
+    fn consume(&mut self, expected: TokenKind, err_msg: &str) -> Result<(), ParseError> {
         if self.match_token(expected) {
-            return;
+            return Ok(());
         } 
-        panic!("Parser: {}",err_msg)
+        Err(self.error(err_msg))
     }
 
-    fn check_token(&self,expected: TokenKind) -> bool {
-        if self.is_at_end(){
+    fn check_token(&self, expected: TokenKind) -> bool {
+        if self.is_at_end() {
             return false;
         }
         *self.current_token() == expected

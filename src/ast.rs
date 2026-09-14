@@ -49,4 +49,6 @@ pub enum Stmt {
     Break,
     Continue,
     Block(Vec<Stmt>),
+    Import(String),
+    Line(usize),
 }

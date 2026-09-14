@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fmt, ops::{Add, Div, Mul, Rem, Sub}, rc::Rc};
+use std::{cell::RefCell, collections::HashMap,fmt, rc::Rc};
 
 use crate::opcode::OpCode;
 
@@ -22,111 +22,114 @@ pub enum Value {
     Map(Rc<RefCell<HashMap<String,  Value>>>),
 }
 
-impl Add for Value {
-    type Output = Value;
+// impl Add for Value {
+//     type Output = Value;
 
-    fn add(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a+b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a+b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 + b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a + b as f64),
-            (Value::Str(a), Value::Str(b)) => {
-                let mut combined = (*a).clone();
-                combined.push_str(&b);
-                Value::Str(Rc::new(combined))
-            }
-            (Value::Str(a), Value::Int(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
-            (Value::Int(a), Value::Str(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
+//     fn add(self, rhs: Self) -> Self::Output {
+//         match (self, rhs) {
+//             (Value::Int(a), Value::Int(b)) => Value::Int(a+b),
+//             (Value::Float(a), Value::Float(b)) => Value::Float(a+b),
+//             (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 + b),
+//             (Value::Float(a), Value::Int(b)) => Value::Float(a + b as f64),
+//             (Value::Str(a), Value::Str(b)) => {
+//                 let mut combined = (*a).clone();
+//                 combined.push_str(&b);
+//                 Value::Str(Rc::new(combined))
+//             }
+//             (Value::Str(a), Value::Int(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
+//             (Value::Int(a), Value::Str(b)) => Value::Str(Rc::new(format!("{}{}",a,b))),
 
-            _ => panic!("Runtime error: invalid types for Add"),
+//             (Value::Str(x), y) => Value::Str(Rc::new(format!("{}{}", x, y))),
+//             (x, Value::Str(y)) => Value::Str(Rc::new(format!("{}{}", x, y))),
 
-        }
-    }
-}
+//             _ => panic!("Runtime error: invalid types for Add"),
 
-impl Sub for Value {
-    type Output = Value;
+//         }
+//     }
+// }
 
-    fn sub(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a+b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a-b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 - b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a - b as f64),
-            _ => panic!("Runtime error: invalid types for Add"),
+// impl Sub for Value {
+//     type Output = Value;
 
-        }
-    }
-}
+//     fn sub(self, rhs: Self) -> Self::Output {
+//         match (self, rhs) {
+//             (Value::Int(a), Value::Int(b)) => Value::Int(a+b),
+//             (Value::Float(a), Value::Float(b)) => Value::Float(a-b),
+//             (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 - b),
+//             (Value::Float(a), Value::Int(b)) => Value::Float(a - b as f64),
+//             _ => panic!("Runtime error: invalid types for Add"),
 
-impl Mul for Value {
-    type Output = Value;
+//         }
+//     }
+// }
 
-    fn mul(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a*b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a*b),
-            (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 * b),
-            (Value::Float(a), Value::Int(b)) => Value::Float(a * b as f64),
-            _ => panic!("Runtime error: invalid types for Add"),
+// impl Mul for Value {
+//     type Output = Value;
 
-        }
-    }
-}
+//     fn mul(self, rhs: Self) -> Self::Output {
+//         match (self, rhs) {
+//             (Value::Int(a), Value::Int(b)) => Value::Int(a*b),
+//             (Value::Float(a), Value::Float(b)) => Value::Float(a*b),
+//             (Value::Int(a), Value::Float(b)) => Value::Float(a as f64 * b),
+//             (Value::Float(a), Value::Int(b)) => Value::Float(a * b as f64),
+//             _ => panic!("Runtime error: invalid types for Add"),
 
-impl Div for Value {
-    type Output = Value;
+//         }
+//     }
+// }
 
-    fn div(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => {
-                if b == 0 { panic!("Runtime error: div by zero"); }
-                Value::Int(a / b)
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b == 0.0 { panic!("Runtime error: div by zero"); }
-                Value::Float(a / b)
-            },
-            (Value::Int(a), Value::Float(b)) => {
-                if b == 0.0 { panic!("Runtime error: div by zero"); }
-                Value::Float(a as f64 / b)
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                if b == 0 { panic!("Runtime error: div by zero"); }
-                Value::Float(a / b as f64)
-            }
-            _ => panic!("Runtime error: invalid types for Add"),
+// impl Div for Value {
+//     type Output = Value;
 
-        }
-    }
-}
+//     fn div(self, rhs: Self) -> Self::Output {
+//         match (self, rhs) {
+//             (Value::Int(a), Value::Int(b)) => {
+//                 if b == 0 { panic!("Runtime error: div by zero"); }
+//                 Value::Int(a / b)
+//             }
+//             (Value::Float(a), Value::Float(b)) => {
+//                 if b == 0.0 { panic!("Runtime error: div by zero"); }
+//                 Value::Float(a / b)
+//             },
+//             (Value::Int(a), Value::Float(b)) => {
+//                 if b == 0.0 { panic!("Runtime error: div by zero"); }
+//                 Value::Float(a as f64 / b)
+//             }
+//             (Value::Float(a), Value::Int(b)) => {
+//                 if b == 0 { panic!("Runtime error: div by zero"); }
+//                 Value::Float(a / b as f64)
+//             }
+//             _ => panic!("Runtime error: invalid types for Add"),
 
-impl Rem for Value {
-    type Output = Value;
-    fn rem(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Int(a), Value::Int(b)) => {
-                if b == 0 { panic!("Runtime error: modulo by zero"); }
-                Value::Int(a % b)
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b == 0.0 { panic!("Runtime error: modulo by zero"); }
-                Value::Float(a % b)
-            },
-            (Value::Int(a), Value::Float(b)) => {
-                if b == 0.0 { panic!("Runtime error: modulo by zero"); }
-                Value::Float(a as f64 % b)
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                if b == 0 { panic!("Runtime error: modulo by zero"); }
-                Value::Float(a % b as f64)
-            }
-            _ => panic!("Runtime error: invalid types for "),
+//         }
+//     }
+// }
 
-        }
-    }
-}
+// impl Rem for Value {
+//     type Output = Value;
+//     fn rem(self, rhs: Self) -> Self::Output {
+//         match (self, rhs) {
+//             (Value::Int(a), Value::Int(b)) => {
+//                 if b == 0 { panic!("Runtime error: modulo by zero"); }
+//                 Value::Int(a % b)
+//             }
+//             (Value::Float(a), Value::Float(b)) => {
+//                 if b == 0.0 { panic!("Runtime error: modulo by zero"); }
+//                 Value::Float(a % b)
+//             },
+//             (Value::Int(a), Value::Float(b)) => {
+//                 if b == 0.0 { panic!("Runtime error: modulo by zero"); }
+//                 Value::Float(a as f64 % b)
+//             }
+//             (Value::Float(a), Value::Int(b)) => {
+//                 if b == 0 { panic!("Runtime error: modulo by zero"); }
+//                 Value::Float(a % b as f64)
+//             }
+//             _ => panic!("Runtime error: invalid types for "),
+
+//         }
+//     }
+// }
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
@@ -171,7 +174,13 @@ impl fmt::Display for Value {
             Value::Map(map) => {
                 let borrowed = map.borrow();
                 let items: Vec<String> = borrowed.iter()
-                    .map(|(k,v)| format!("\"{}\": {:?}", k, v))
+                    .map(|(k,v)| {
+                        if let Value::Str(s) = v {
+                            format!("\"{}\": \"{}\"",k, s)
+                        } else {
+                            format!("\"{}\": {}",k, v)
+                        }
+                    })
                     .collect();
                 write!(f, "{{{}}}", items.join(", "))
             }

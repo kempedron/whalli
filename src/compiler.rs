@@ -14,6 +14,7 @@ pub struct LoopState {
 }
 pub struct Compiler {
     bytecode: Vec<OpCode>,
+    // lines: Vec<usize>,
     locals: Vec<Local>,
     scope_depth: usize,
     loops: Vec<LoopState>,
@@ -259,6 +260,12 @@ impl Compiler {
                     self.compile_stmt(stmt);
                 }
                 self.end_scope();
+            }
+            Stmt::Line(line) => {
+                self.bytecode.push(OpCode::SetLine(*line));
+            }
+            Stmt::Import(name) => {
+                self.bytecode.push(OpCode::Import(name.clone()));
             }
         }
     }

@@ -1,7 +1,20 @@
-let dict = {
-    "name": "Alice",
-    "age": 32,
-}
-println(dict)
-println(f"DATA:\nname:{dict.name}\nage:{dict.age}")
-println(f"Через год ей будет {dict.age + 1}!")
+import fs
+import time
+import math
+
+// Проверка приведения типов
+let user_input = "42"
+let age = int(user_input)
+println(f"Возраст через год: {age + 1}")
+
+let pi_text = str(math.pi)
+println("PI как текст: " + pi_text)
+
+// Работа с файлами и временем
+let t_start = time.now()
+fs.write("test.txt", "Привет из Whalli!")
+let content = fs.read("test.txt")
+println("Файл содержит: ", content)
+
+time.sleep(1)
+println(f"Прошло времени: {time.now() - t_start} сек.")

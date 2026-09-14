@@ -25,8 +25,7 @@ pub enum TokenKind {
     False,
     Str(String),
     FStr(String),
-    // List,
-    Identifier(String), // var name
+    Identifier(String),
     Function,
     LBrace, // {
     RBrace, // }
@@ -46,11 +45,18 @@ pub enum TokenKind {
     In,
     Break,
     Continue,
+    Import,
     Eof,
 }
+
 #[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenKind,
+    pub line: usize,
+}
+
+pub struct LexError {
+    pub message: String,
     pub line: usize,
 }
 
@@ -70,7 +76,7 @@ impl Lexer {
         Token { kind, line: self.line }
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token>{
+    pub fn tokenize(&mut self) -> Result<Vec<Token>, LexError> {
         let mut tokens = Vec::new();
         while self.pos < self.chars.len() {
             let current = self.chars[self.pos];
@@ -92,7 +98,7 @@ impl Lexer {
                 }
                 ')' => {
                     tokens.push(self.make_token(TokenKind::RParen));
-                    if self.nesting > 0 { self.nesting -= 1;}
+                    if self.nesting > 0 { self.nesting -= 1; }
                     self.pos += 1;
                 }
                 '{' => {
@@ -110,10 +116,10 @@ impl Lexer {
                 }
                 ']' => {
                     tokens.push(self.make_token(TokenKind::RBracket));
-                    if self.nesting > 0 { self.nesting -= 1;}
+                    if self.nesting > 0 { self.nesting -= 1; }
                     self.pos += 1;
                 }
-                ':'  => {
+                ':' => {
                     tokens.push(self.make_token(TokenKind::Colon));
                     self.pos += 1;
                 }
@@ -149,7 +155,7 @@ impl Lexer {
                     }
                 }
                 '/' => {
-                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '/'{
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '/' {
                         while self.pos < self.chars.len() && self.chars[self.pos] != '\n' {
                             self.pos += 1;   
                         }                    
@@ -171,7 +177,7 @@ impl Lexer {
                     }
                 }
                 '=' => {
-                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '='{
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
                         tokens.push(self.make_token(TokenKind::Equal));
                     } else {
@@ -187,7 +193,7 @@ impl Lexer {
                     tokens.push(self.make_token(TokenKind::Less));
                     self.pos += 1;
                 }
-                ';'=> {
+                ';' => {
                     tokens.push(self.make_token(TokenKind::Semicolon));
                     self.pos += 1;
                 }
@@ -201,23 +207,23 @@ impl Lexer {
                         let mut s = String::new();
                         while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
                             let ch = self.chars[self.pos];
-                            if ch  == '\\' {
-                            self.pos += 1;
-                            if self.pos < self.chars.len(){
-                                match self.chars[self.pos] {
-                                    'n' => s.push('\n'),
-                                    't' => s.push('\t'),
-                                    '"' => s.push('"'),
-                                    other => {
-                                        s.push('\\');
-                                        s.push(other);
+                            if ch == '\\' {
+                                self.pos += 1;
+                                if self.pos < self.chars.len() {
+                                    match self.chars[self.pos] {
+                                        'n' => s.push('\n'),
+                                        't' => s.push('\t'),
+                                        '"' => s.push('"'),
+                                        other => {
+                                            s.push('\\');
+                                            s.push(other);
+                                        }
                                     }
                                 }
+                            } else {
+                                s.push(ch);
                             }
-                        } else {
-                            s.push(ch);
-                        }
-                        self.pos += 1;   
+                            self.pos += 1;   
                         }
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::FStr(s)));
@@ -232,9 +238,9 @@ impl Lexer {
                     let mut s = String::new();
                     while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
                         let ch = self.chars[self.pos];
-                        if ch  == '\\' {
+                        if ch == '\\' {
                             self.pos += 1;
-                            if self.pos < self.chars.len(){
+                            if self.pos < self.chars.len() {
                                 match self.chars[self.pos] {
                                     'n' => s.push('\n'),
                                     't' => s.push('\t'),
@@ -249,7 +255,7 @@ impl Lexer {
                             s.push(ch);
                         }
                         self.pos += 1;
-                        }
+                    }
                     self.pos += 1;
                     tokens.push(self.make_token(TokenKind::Str(s)));    
                 }
@@ -257,16 +263,21 @@ impl Lexer {
                 c if c.is_ascii_digit() => {
                     tokens.push(self.read_number());
                 }
-                c if c.is_ascii_alphabetic() => {
+                c if c.is_ascii_alphabetic() || c == '_' => {
                     let word = self.read_word();
                     let kind = Self::ident_or_keyword(word);
                     tokens.push(self.make_token(kind));
                 }
-                _ => panic!("lexer: undefined char {}", current),
+                other => {
+                    return Err(LexError {
+                        message: format!("Undefined character '{}'", other),
+                        line: self.line,
+                    });
+                }
             }
         }
         tokens.push(self.make_token(TokenKind::Eof));
-        tokens
+        Ok(tokens)
     }
 
     fn ident_or_keyword(word: String) -> TokenKind {
@@ -286,6 +297,7 @@ impl Lexer {
             "not" => TokenKind::Not,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "import" => TokenKind::Import,
             _ => TokenKind::Identifier(word),
         }
     }
@@ -294,37 +306,33 @@ impl Lexer {
         let mut num_str = String::new();
         let mut is_float = false;
         
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.' || self.chars[self.pos] == '_'){
+        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.' || self.chars[self.pos] == '_') {
             let ch = self.chars[self.pos];
-            
             if ch == '_' {
                 self.pos += 1;
                 continue;
             }
-
             if ch == '.' {
                 is_float = true;
             }
             num_str.push(ch);
-            self.pos+=1;
+            self.pos += 1;
         }
-        if is_float{
+        if is_float {
             let val = num_str.parse::<f64>().expect("Error parsing Float");
             self.make_token(TokenKind::Float(val))
         } else {
             let val = num_str.parse::<i64>().expect("Error parse int");
             self.make_token(TokenKind::Int(val))
         }
-
     }
     
     fn read_word(&mut self) -> String {
         let mut word = String::new();
-        while self.pos < self.chars.len() && self.chars[self.pos].is_alphabetic() {
+        while self.pos < self.chars.len() && (self.chars[self.pos].is_alphabetic() || self.chars[self.pos] == '_') {
             word.push(self.chars[self.pos]);
-            self.pos += 1
+            self.pos += 1;
         }
         word
     }
 }
-

@@ -29,5 +29,6 @@ pub enum OpCode {
     And,
     Or,
     Not,
-    
+    SetLine(usize),
+    Import(String),
 }

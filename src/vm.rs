@@ -8,10 +8,17 @@ pub struct CallFrame {
     pub stack_offset: usize
 }
 
+pub  struct RuntimeError {
+    pub message: String,
+    pub line: usize,
+}
+
 pub struct VM{
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     globals: HashMap<String, Value>,
+    modules: HashMap<String, Value>,
+    pub current_line: usize,
 }
 
 
@@ -30,70 +37,147 @@ impl VM {
             stack_offset: 0,
         };
 
-        let globals = crate::stdlib::register_natives();
+        let (globals, modules) = crate::stdlib::register_natives();
         
         VM {
             stack: Vec::new(),
             frames: vec![initial_frame],
             globals: globals,
+            modules: modules,
+            current_line: 1,
         }
     }
 
-    pub fn run(&mut self){
-        
+    pub fn run(&mut self) -> Result<(), RuntimeError> {
+        macro_rules! runtime_error {
+            ($msg:expr) => {
+                return Err(RuntimeError { message: $msg.to_string(), line: self.current_line })
+            };
+            ($fmt:expr, $($arg:expr),*) => {
+                return Err(RuntimeError { message: format!($fmt, $($arg),*), line: self.current_line })
+            };
+        }
+
+        macro_rules! pop {
+            () => {
+                self.stack.pop().ok_or_else(|| RuntimeError { 
+                    message: "Stack underflow (internal VM error)".to_string(), 
+                    line: self.current_line 
+                })?
+            };
+        }
+
         while !self.frames.is_empty() {
             let frame_idx = self.frames.len() - 1;
-            let frame = &mut self.frames[frame_idx];
-
-            if frame.ip >= frame.function.chunk.len(){
+            
+            if self.frames[frame_idx].ip >= self.frames[frame_idx].function.chunk.len() {
                 self.frames.pop();
                 continue;
             }
 
-            let instractions = frame.function.chunk[frame.ip].clone();
-            frame.ip+=1;
+            let instruction = self.frames[frame_idx].function.chunk[self.frames[frame_idx].ip].clone();
+            self.frames[frame_idx].ip += 1;
 
-            match instractions {
+            match instruction {
                 OpCode::Push(val) => {
-                    self.stack.push(val.clone());
+                    self.stack.push(val);
                 }
+                
+                // Math
                 OpCode::Add => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    self.stack.push(a+b);
+                    let b = pop!();
+                    let a = pop!();
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x + y)),
+                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x + y)),
+                        (Value::Int(x), Value::Float(y)) => self.stack.push(Value::Float((x as f64) + y)),
+                        (Value::Float(x), Value::Int(y)) => self.stack.push(Value::Float(x + (y as f64))),
+                        (Value::Str(x), Value::Str(y)) => self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y)))),
+                        (Value::Str(x), y) => self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y)))),
+                        (x, Value::Str(y)) => self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y)))),
+                        _ => runtime_error!("Invalid types for '+' operation"),
+                    }
                 }
                 OpCode::Sub => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    self.stack.push(a-b);
+                    let b = pop!();
+                    let a = pop!();
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x - y)),
+                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x - y)),
+                        (Value::Int(x), Value::Float(y)) => self.stack.push(Value::Float((x as f64) - y)),
+                        (Value::Float(x), Value::Int(y)) => self.stack.push(Value::Float(x - (y as f64))),
+                        _ => runtime_error!("Invalid types for '-' operation"),
+                    }
                 }
                 OpCode::Mul => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    self.stack.push(a*b);
+                    let b = pop!();
+                    let a = pop!();
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x * y)),
+                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x * y)),
+                        (Value::Int(x), Value::Float(y)) => self.stack.push(Value::Float((x as f64) * y)),
+                        (Value::Float(x), Value::Int(y)) => self.stack.push(Value::Float(x * (y as f64))),
+                        _ => runtime_error!("Invalid types for '*' operation"),
+                    }
                 }
                 OpCode::Div => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    self.stack.push(a/b);
+                    let b = pop!();
+                    let a = pop!();
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            if y == 0 { runtime_error!("Division by zero"); }
+                            self.stack.push(Value::Int(x / y));
+                        }
+                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x / y)),
+                        (Value::Int(x), Value::Float(y)) => self.stack.push(Value::Float((x as f64) / y)),
+                        (Value::Float(x), Value::Int(y)) => {
+                            if y == 0 { runtime_error!("Division by zero"); }
+                            self.stack.push(Value::Float(x / (y as f64)));
+                        }
+                        _ => runtime_error!("Invalid types for '/' operation"),
+                    }
                 }
                 OpCode::Mod => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    self.stack.push(a % b);
+                    let b = pop!();
+                    let a = pop!();
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            if y == 0 { runtime_error!("Modulo by zero"); }
+                            self.stack.push(Value::Int(x % y));
+                        }
+                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x % y)),
+                        (Value::Int(x), Value::Float(y)) => self.stack.push(Value::Float((x as f64) % y)),
+                        (Value::Float(x), Value::Int(y)) => {
+                            if y == 0 { runtime_error!("Modulo by zero"); }
+                            self.stack.push(Value::Float(x % (y as f64)));
+                        }
+                        _ => runtime_error!("Invalid types for '%' operation"),
+                    }
                 }
+                
+                // Variables and functions
                 OpCode::StoreGlobal(name) => {
-                    let val = self.stack.pop().expect("Error: stack empty for assignment");
+                    let val = pop!();
                     self.globals.insert(name.clone(), val);
                 }
                 OpCode::LoadGlobal(name) => {
-                    let val = self.globals.get(&name.to_string()).expect(&format!("Runtime error: undefined variable {}",name));
-                    self.stack.push(val.clone());
+                    if let Some(val) = self.globals.get(&name) {
+                        self.stack.push(val.clone());
+                    } else {
+                        runtime_error!("Undefined variable '{}'", name);
+                    }
                 }
                 OpCode::LoadLocal(idx) => {
-                    let val = self.stack[frame.stack_offset + idx].clone();
+                    let offset = self.frames[frame_idx].stack_offset;
+                    let val = self.stack[offset + idx].clone();
                     self.stack.push(val);
                 }
+                OpCode::SetLocal(idx) => {
+                    let val = pop!();
+                    let offset = self.frames[frame_idx].stack_offset;
+                    self.stack[offset + idx] = val;
+                }
+                
                 OpCode::Call(arg_count) => {
                     let callee_index = self.stack.len() - arg_count - 1;
                     let callee = self.stack[callee_index].clone();
@@ -101,9 +185,11 @@ impl VM {
                     match callee {
                         Value::Function(func) => {
                             if func.arity != arg_count {
-                                panic!("Runtime error: function '{}' expects {} arguments, got {}",func.name, func.arity, arg_count);
+                                runtime_error!(
+                                    "Function '{}' expects {} arguments, got {}",
+                                    func.name, func.arity, arg_count
+                                );
                             }
-
                             let new_frame = CallFrame {
                                 function: func,
                                 ip: 0,
@@ -112,23 +198,73 @@ impl VM {
                             self.frames.push(new_frame);
                         }
                         Value::Native(native_fn) => {
-                            let mut args = Vec::with_capacity(arg_count);{
-                                for _ in 0..arg_count {
-                                    args.push(self.stack.pop().unwrap());
+                            let mut args = Vec::with_capacity(arg_count);
+                            for _ in 0..arg_count {
+                                args.push(pop!());
+                            }
+                            args.reverse();
+                            pop!();
+                            let result = native_fn(args);
+                            self.stack.push(result);
+                        }
+                        _ => runtime_error!("Attempt to call a non-function value"),
+                    }
+                }
+                OpCode::MethodCall(method_name, arg_count) => {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(pop!());
+                    }
+                    args.reverse();
+                    let obj = pop!();
+                    
+                    match &obj {
+                        Value::Map(map) => {
+                            // Если объект — словарь (модуль), ищем функцию по ключу внутри него
+                            if let Some(callable) = map.borrow().get(&method_name).cloned() {
+                                match callable {
+                                    Value::Native(native_fn) => {
+                                        let result = native_fn(args);
+                                        self.stack.push(result);
+                                    }
+                                    Value::Function(func) => {
+                                        if func.arity != arg_count {
+                                            runtime_error!(
+                                                "Function '{}' expects {} arguments, got {}",
+                                                func.name, func.arity, arg_count
+                                            );
+                                        }
+                                        self.stack.push(Value::Function(func.clone()));
+                                        for arg in args {
+                                            self.stack.push(arg);
+                                        }
+                                        let callee_index = self.stack.len() - arg_count - 1;
+                                        let new_frame = CallFrame {
+                                            function: func,
+                                            ip: 0,
+                                            stack_offset: callee_index + 1,
+                                        };
+                                        self.frames.push(new_frame);
+                                    }
+                                    _ => runtime_error!("Property '{}' is not a function", method_name),
                                 }
-                                args.reverse();
-                                self.stack.pop();
-
-                                let result = native_fn(args);
-                                self.stack.push(result);
+                            } else {
+                                match obj.call_method(&method_name, args) {
+                                    Ok(result) => self.stack.push(result),
+                                    Err(err_msg) => runtime_error!("{}", err_msg),
+                                }
                             }
                         }
-                        _ => panic!("Runtime error: attempt to call a non-function value")
+                        _ => {
+                            match obj.call_method(&method_name, args) {
+                                Ok(result) => self.stack.push(result),
+                                Err(err_msg) => runtime_error!("{}", err_msg),
+                            }
+                        }
                     }
                 }
                 OpCode::Return => {
                     let result = self.stack.pop().unwrap_or(Value::Nil);
-
                     let frame = self.frames.pop().unwrap();
                     
                     if frame.stack_offset > 0 {
@@ -138,67 +274,108 @@ impl VM {
                         self.stack.push(result);
                     }
                 }
+                
                 OpCode::JumpIfFalse(target_ip) => {
-                    let condition = self.stack.pop().expect("Stack empty");
+                    let condition = pop!();
                     if let Value::Bool(false) = condition {
-                        frame.ip = target_ip;
+                        self.frames[frame_idx].ip = target_ip;
                     }
                 }
                 OpCode::Jump(target_ip) => {
-                    frame.ip = target_ip;
+                    self.frames[frame_idx].ip = target_ip;
                 }
                 OpCode::Equal => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
+                    let b = pop!();
+                    let a = pop!();
                     self.stack.push(Value::Bool(a == b));
                 }
                 OpCode::Less => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    let res = match(a, b) {
+                    let b = pop!();
+                    let a = pop!();
+                    let res = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => x < y,
                         (Value::Float(x), Value::Float(y)) => x < y,
                         (Value::Int(x), Value::Float(y)) => (x as f64) < y,
                         (Value::Float(x), Value::Int(y)) => x < (y as f64),
-                        _ => panic!("Runtime error: invalid types for '<' operation")
+                        _ => runtime_error!("Invalid types for '<' operation"),
                     };
                     self.stack.push(Value::Bool(res));
                 }
                 OpCode::Greater => {
-                    let b = self.stack.pop().expect("Error: stack empty");
-                    let a = self.stack.pop().expect("Error: stack empty");
-                    let res = match(a, b) {
+                    let b = pop!();
+                    let a = pop!();
+                    let res = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => x > y,
                         (Value::Float(x), Value::Float(y)) => x > y,
                         (Value::Int(x), Value::Float(y)) => (x as f64) > y,
                         (Value::Float(x), Value::Int(y)) => x > (y as f64),
-                        _ => panic!("Runtime error: invalid types for '>' operation")
+                        _ => runtime_error!("Invalid types for '>' operation"),
                     };
                     self.stack.push(Value::Bool(res));
                 }
+                OpCode::And => {
+                    let b = pop!();
+                    let a = pop!();
+                    if let (Value::Bool(x), Value::Bool(y)) = (a, b) {
+                        self.stack.push(Value::Bool(x && y));
+                    } else { 
+                        runtime_error!("'and' expects booleans"); 
+                    }
+                }
+                OpCode::Or => {
+                    let b = pop!();
+                    let a = pop!();
+                    if let (Value::Bool(x), Value::Bool(y)) = (a, b) {
+                        self.stack.push(Value::Bool(x || y));
+                    } else { 
+                        runtime_error!("'or' expects booleans"); 
+                    }
+                }
+                OpCode::Not => {
+                    let a = pop!();
+                    if let Value::Bool(x) = a {
+                        self.stack.push(Value::Bool(!x));
+                    } else { 
+                        runtime_error!("'not' expects a boolean"); 
+                    }
+                }
+
                 OpCode::BuildList(size) => {
                     let start = self.stack.len() - size;
                     let elements: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(Value::List(Rc::new(std::cell::RefCell::new(elements))));
                 }
                 OpCode::ListLen => {
-                    let val = self.stack.pop().expect("Stack empty");
+                    let val = pop!();
                     if let Value::List(list) = val {
                         let len = list.borrow().len() as i64;
                         self.stack.push(Value::Int(len));
                     } else {
-                        panic!("Runtime error: Attempt to get length of a non-list");
+                        runtime_error!("Attempt to get length of a non-list");
                     }
                 }
+                OpCode::BuildMap(size) => {
+                    let mut map = HashMap::new();
+                    for _ in 0..size {
+                        let val = pop!();
+                        let key = pop!();
+                        let key_str = match key {
+                            Value::Str(s) => (*s).clone(),
+                            _ => runtime_error!("Map keys must be strings"),
+                        };
+                        map.insert(key_str, val);
+                    }
+                    self.stack.push(Value::Map(Rc::new(RefCell::new(map))));
+                }
                 OpCode::IndexGet => {
-                    let index = self.stack.pop().expect("Stack empty");
-                    let array = self.stack.pop().expect("Stack empty");
+                    let index = pop!();
+                    let collection = pop!();
 
-                    match (array, index) {
+                    match (collection, index) {
                         (Value::List(list), Value::Int(idx)) => {
                             let borrowed = list.borrow();
                             if idx < 0 || idx >= borrowed.len() as i64 {
-                                panic!("Runtime error: Index {} out of bounds", idx);
+                                runtime_error!("Index {} out of bounds", idx);
                             }
                             self.stack.push(borrowed[idx as usize].clone());
                         }
@@ -207,19 +384,19 @@ impl VM {
                             let val = borrowed.get(&*key).unwrap_or(&Value::Nil);
                             self.stack.push(val.clone());
                         }
-                        _ => panic!("Runtime error: Invalid array or index"),
+                        _ => runtime_error!("Invalid target or index for reading"),
                     }
                 }
                 OpCode::IndexSet => {
-                    let value = self.stack.pop().expect("Stack empty");
-                    let index = self.stack.pop().expect("Stack empty");
-                    let array = self.stack.pop().expect("Stack empty");
+                    let value = pop!();
+                    let index = pop!();
+                    let collection = pop!();
 
-                    match (array, index) {
-                        (Value::List(list),Value::Int(idx)) => {
+                    match (collection, index) {
+                        (Value::List(list), Value::Int(idx)) => {
                             let mut borrowed = list.borrow_mut();
-                            if idx < 0 || idx > borrowed.len() as i64 {
-                                panic!("Runtime error: Index out of bounds");
+                            if idx < 0 || idx >= borrowed.len() as i64 {
+                                runtime_error!("Index {} out of bounds", idx);
                             }
                             borrowed[idx as usize] = value;
                         }
@@ -227,65 +404,25 @@ impl VM {
                             let mut borrowed = map.borrow_mut(); 
                             borrowed.insert((*key).clone(), value);
                         }
-                        _ => panic!("Runtime error: Invalid target for index assignment"),
+                        _ => runtime_error!("Invalid target for index assignment"),
                     }
                 }
+                OpCode::Import(module_name) => {
+                    if let Some(module_val) = self.modules.get(&module_name) {
+                        self.globals.insert(module_name.clone(), module_val.clone());
+                    } else {
+                        runtime_error!("Module '{}' not found", module_name)
+                    }
+                }
+                
                 OpCode::Pop => { 
-                    self.stack.pop();
-                },
-                OpCode::And => {
-                    let b = self.stack.pop().expect("Stack empty");
-                    let a = self.stack.pop().expect("Stack empty");
-                    if let(Value::Bool(x), Value::Bool(y)) = (a,b) {
-                        self.stack.push(Value::Bool(x && y));
-                    } else { panic!("Runtime error: 'and' expects booleans"); }
+                    pop!();
                 }
-                OpCode::Or => {
-                    let b = self.stack.pop().expect("Stack empty");
-                    let a = self.stack.pop().expect("Stack empty");
-                    if let(Value::Bool(x), Value::Bool(y)) = (a,b) {
-                        self.stack.push(Value::Bool(x || y));
-                    } else { panic!("Runtime error: 'or' expects booleans"); }
+                OpCode::SetLine(line) => {
+                    self.current_line = line;
                 }
-                OpCode::Not => {
-                    let a = self.stack.pop().expect("Stack empty");
-                    if let Value::Bool(x)  = a {
-                        self.stack.push(Value::Bool(!x));
-                    } else { panic!("Runtime error: 'not' expects a boolean"); }
-                }
-                OpCode::SetLocal(idx) => {
-                    let val = self.stack.pop().expect("Stack empty");
-                    self.stack[frame.stack_offset + idx] = val;
-                }
-                OpCode::BuildMap(size) => {
-                    let mut map = HashMap::new();
-
-                    for _ in 0..size {
-                        let val = self.stack.pop().unwrap();
-                        let key = self.stack.pop().unwrap();
-
-                        let  key_str = match key {
-                            Value::Str(s) => (*s).clone(),
-                            _ => panic!("Runtime error: Map keys must be strings"),
-                        };
-                        map.insert(key_str, val);
-                    }
-                    self.stack.push(Value::Map(Rc::new(RefCell::new(map))));
-                }
-                OpCode::MethodCall(method_name, arg_count) => {
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _  in 0..arg_count {
-                        args.push(self.stack.pop().unwrap());
-                    }
-                    args.reverse();
-                    let obj = self.stack.pop().unwrap();
-                    match obj.call_method(&method_name, args) {
-                        Ok(result) => self.stack.push(result),
-                        Err(err_msg) => panic!("Runtime error: {}", err_msg),
-                    }
-                }
-
             }
         }
+        Ok(())
     }
 }
