@@ -1,5 +1,5 @@
-use std::{collections::HashMap, rc::Rc};
 use crate::value::{FunctionObj, Value};
+use std::{collections::HashMap, rc::Rc};
 
 #[derive(Debug, Clone)]
 pub enum Obj {
@@ -7,6 +7,17 @@ pub enum Obj {
     Map(HashMap<String, Value>),
     Upvalue(Value),
     Closure(Rc<FunctionObj>, Vec<usize>),
+
+    StructDef {
+        name: String,
+        fields: Vec<String>,
+        methods: HashMap<String, Value>,
+    },
+    Instance {
+        struct_id: usize,
+        fields: HashMap<String, Value>,
+    },
+    Interface(Vec<String>),
 }
 
 pub struct HeapObj {
@@ -21,7 +32,10 @@ pub struct Heap {
 
 impl Heap {
     pub fn new() -> Self {
-        Heap { objects: Vec::new(), free_list: Vec::new() }
+        Heap {
+            objects: Vec::new(),
+            free_list: Vec::new(),
+        }
     }
 
     pub fn live_count(&self) -> usize {
@@ -33,10 +47,12 @@ impl Heap {
 
         while let Some(id) = worklist.pop() {
             if let Some(Some(heap_obj)) = self.objects.get_mut(id) {
-                if heap_obj.marked { continue; }
-                
+                if heap_obj.marked {
+                    continue;
+                }
+
                 heap_obj.marked = true;
-                
+
                 match &heap_obj.data {
                     Obj::List(list) => {
                         for val in list {
@@ -53,13 +69,27 @@ impl Heap {
                         }
                     }
                     Obj::Upvalue(val) => {
-                        if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                        if let Value::ObjRef(child_id) = val {
+                            worklist.push(*child_id);
+                        }
                     }
                     Obj::Closure(_, upvalues) => {
                         for upvalue_id in upvalues {
                             worklist.push(*upvalue_id);
                         }
                     }
+                    Obj::StructDef { methods, .. } => {
+                        for val in methods.values() {
+                            if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                        }
+                    }
+                    Obj::Instance { struct_id, fields } => {
+                        worklist.push(*struct_id);
+                        for val in fields.values() {
+                            if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                        }
+                    }
+                    Obj::Interface(_) => {}
                 }
             }
         }
@@ -83,7 +113,10 @@ impl Heap {
     }
 
     pub fn alloc(&mut self, data: Obj) -> usize {
-        let heap_obj = HeapObj { marked: false, data };
+        let heap_obj = HeapObj {
+            marked: false,
+            data,
+        };
         if let Some(idx) = self.free_list.pop() {
             self.objects[idx] = Some(heap_obj);
             idx
@@ -95,14 +128,16 @@ impl Heap {
     }
 
     pub fn get(&self, id: usize) -> Result<&Obj, String> {
-        self.objects.get(id)
+        self.objects
+            .get(id)
             .and_then(|opt| opt.as_ref())
             .map(|h| &h.data)
             .ok_or_else(|| format!("Invalid memory address: {}", id))
     }
 
     pub fn get_mut(&mut self, id: usize) -> Result<&mut Obj, String> {
-        self.objects.get_mut(id)
+        self.objects
+            .get_mut(id)
             .and_then(|opt| opt.as_mut())
             .map(|h| &mut h.data)
             .ok_or_else(|| format!("Invalid memory address: {}", id))

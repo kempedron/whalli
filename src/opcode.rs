@@ -42,4 +42,8 @@ pub enum OpCode {
     GetUpvalue(usize),
     SetUpvalue(usize),
     Closure(Rc<FunctionObj>, Vec<UpvalueLoc>),
+    BuildStruct(String, Vec<String>),
+    AddMethod(String),
+    BuildInterface(Vec<String>),
+    CheckIs,
 }

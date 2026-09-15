@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use crate::{ast::{BinaryOp, Expr, Stmt, UnaryOp}, value::Value, lexer::{Token, TokenKind, Lexer}};
+use crate::{
+    ast::{BinaryOp, Expr, Stmt, UnaryOp}, lexer::{Lexer, Token, TokenKind}, value::Value,
+};
 
 pub struct ParseError {
     pub message: String,
@@ -74,6 +76,100 @@ impl Parser {
             return Ok(Stmt::Block(self.parse_block()?));
         }
 
+        if self.match_token(TokenKind::Function) {
+            return self.parse_function();
+        }
+
+        if self.match_token(TokenKind::Struct) {
+            let name_token = self.advance().clone();
+            let struct_name = match name_token {
+                TokenKind::Identifier(n) => n,
+                _ => Err(self.error("Expected struct name"))?,
+            };
+
+            self.consume(TokenKind::LBrace, "Expected '{' after struct name")?;
+
+            let mut fields = Vec::new();
+            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+                while self.match_token(TokenKind::NewLine) {}
+                if self.check_token(TokenKind::RBrace) { break; }
+
+                let field_token = self.advance().clone();
+                let field_name = match field_token {
+                    TokenKind::Identifier(n) => n,
+                    _ => Err(self.error("Expected field name"))?,
+
+                };
+                self.consume(TokenKind::Colon, "Expected ':' after field name")?;
+
+                let token_type = self.advance().clone();
+                let type_name = match token_type {
+                    TokenKind::Identifier(n) => n,
+                    _ => Err(self.error("Expected type name"))?,
+                };
+
+                fields.push((field_name, type_name));
+
+                while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
+            }
+            self.consume(TokenKind::RBrace, "Expected '}' after struct body")?;
+            return Ok(Stmt::Struct(struct_name, fields));
+        }
+
+        if self.match_token(TokenKind::Impl) {
+            let name_token = self.advance().clone();
+            let target_name = match name_token {
+                TokenKind::Identifier(n) => n,
+                _ => return Err(self.error("Expected struct name after 'impl'")),
+            };
+            self.consume(TokenKind::LBrace, "Expected '{' after struct name")?;
+
+            let mut methods = Vec::new();
+            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+                while self.match_token(TokenKind::NewLine) {}
+                if self.check_token(TokenKind::RBrace) { break; }
+            
+                if self.match_token(TokenKind::Function) {
+                    methods.push(self.parse_function()?);
+                } else {
+                    return Err(self.error("Only functions are allowed inside 'impl' blocks"));
+                }
+            }
+            self.consume(TokenKind::RBrace, "Expected '}' after impl block")?;
+            return Ok(Stmt::Impl(target_name, methods));
+        }
+
+        if self.match_token(TokenKind::Interface) {
+            let name_token = self.advance().clone();
+            let interface_name = match name_token {
+                TokenKind::Identifier(n) => n,
+                _ => return Err(self.error("Expected interface name")),
+            };
+            self.consume(TokenKind::LBrace, "Expected '{' after interface name")?;
+
+            let mut methods = Vec::new();
+            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+                while self.match_token(TokenKind::NewLine) {}
+                if self.check_token(TokenKind::RBrace) { break; }
+                
+                self.consume(TokenKind::Function, "Expected 'func' in interface body")?;
+                
+                let method_token = self.advance().clone();
+                match method_token {
+                    TokenKind::Identifier(n) => methods.push(n),
+                    _ => return Err(self.error("Expected method name in interface")),
+                }
+
+                if self.match_token(TokenKind::LParen) {
+                    self.consume(TokenKind::RParen, "Expected ')' after '(' in interface")?;
+                }
+                
+                while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
+            }
+            self.consume(TokenKind::RBrace, "Expected '}' after interface body")?;
+            return Ok(Stmt::Interface(interface_name, methods));
+        }
+
         if self.match_token(TokenKind::Let) {
             let name_token = self.advance().clone();
             let name = match name_token {
@@ -85,34 +181,6 @@ impl Parser {
             self.consume_stmt_end()?;
 
             return Ok(Stmt::Let(name, expr));
-        }
-
-        if self.match_token(TokenKind::Function) {
-            let name_token = self.advance().clone();
-            let name = match name_token {
-                TokenKind::Identifier(n) => n,
-                _ => return Err(self.error("Expect function name after 'func'")),
-            };
-
-            self.consume(TokenKind::LParen, "Expect '(' after function name")?;
-
-            let mut params: Vec<String> = Vec::new();
-            if !self.check_token(TokenKind::RParen) {
-                loop {
-                    let param_token = self.advance().clone();
-                    match param_token {
-                        TokenKind::Identifier(n) => params.push(n),
-                        _ => return Err(self.error("Expect parameter name")),
-                    }
-                    if !self.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-            }
-            self.consume(TokenKind::RParen, "Expected ')' after parameters")?;
-
-            let body = self.parse_block()?;
-            return Ok(Stmt::Functions(name, params, body));
         }
 
         if self.match_token(TokenKind::Return) {
@@ -142,9 +210,13 @@ impl Parser {
             let iterable = self.parse_expression()?;
 
             let body = self.parse_block()?;
-            return Ok(Stmt::For { item: item_name, iterable, body });
+            return Ok(Stmt::For {
+                item: item_name,
+                iterable,
+                body,
+            });
         }
-        
+
         if self.match_token(TokenKind::Break) {
             self.consume_stmt_end()?;
             return Ok(Stmt::Break);
@@ -178,12 +250,19 @@ impl Parser {
             };
         }
 
-        let op = if self.match_token(TokenKind::PlusAssign) { Some(BinaryOp::Add) }
-            else if self.match_token(TokenKind::SubAssign) { Some(BinaryOp::Sub) }
-            else if self.match_token(TokenKind::MulAssign) { Some(BinaryOp::Mul) }
-            else if self.match_token(TokenKind::DivAssign) { Some(BinaryOp::Div) }
-            else if self.match_token(TokenKind::ModAssign) { Some(BinaryOp::Mod) }
-            else { None };
+        let op = if self.match_token(TokenKind::PlusAssign) {
+            Some(BinaryOp::Add)
+        } else if self.match_token(TokenKind::SubAssign) {
+            Some(BinaryOp::Sub)
+        } else if self.match_token(TokenKind::MulAssign) {
+            Some(BinaryOp::Mul)
+        } else if self.match_token(TokenKind::DivAssign) {
+            Some(BinaryOp::Div)
+        } else if self.match_token(TokenKind::ModAssign) {
+            Some(BinaryOp::Mod)
+        } else {
+            None
+        };
 
         if let Some(binary_op) = op {
             let value = self.parse_expression()?;
@@ -205,16 +284,44 @@ impl Parser {
         self.consume_stmt_end()?;
         Ok(Stmt::Expr(expr))
     }
-    
+
     fn parse_expression(&mut self) -> Result<Expr, ParseError> {
         self.parse_or()
+    }
+
+    fn parse_function(&mut self) -> Result<Stmt, ParseError> {
+        let name_token = self.advance().clone();
+        let name = match name_token {
+            TokenKind::Identifier(n) => n,
+            _ => return Err(self.error("Expect function name after 'func'")),
+        };
+
+        self.consume(TokenKind::LParen, "Expect '(' after function name")?;
+
+        let mut params: Vec<String> = Vec::new();
+        if !self.check_token(TokenKind::RParen) {
+            loop {
+                let param_token = self.advance().clone();
+                match param_token {
+                    TokenKind::Identifier(n) => params.push(n),
+                    _ => return Err(self.error("Expect parameter name")),
+                }
+                if !self.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.consume(TokenKind::RParen, "Expected ')' after parameters")?;
+
+        let body = self.parse_block()?;
+        Ok(Stmt::Functions(name, params, body))
     }
 
     fn parse_or(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_and()?;
         while self.match_token(TokenKind::Or) {
             let right = self.parse_and()?;
-            left = Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right)); 
+            left = Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right));
         }
         Ok(left)
     }
@@ -230,16 +337,21 @@ impl Parser {
 
     fn parse_equality(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_term()?;
-        
-        while self.match_token(TokenKind::Plus) 
+
+        while self.match_token(TokenKind::Plus)
             || self.match_token(TokenKind::Sub)
             || self.match_token(TokenKind::Equal)
             || self.match_token(TokenKind::Less)
             || self.match_token(TokenKind::Greater)
+            || self.match_token(TokenKind::Is)
         {
             let op_token = self.previous_token().clone();
             let right = self.parse_term()?;
-            let op = match op_token {
+
+            if op_token == TokenKind::Is {
+                left = Expr::Is(Box::new(left), Box::new(right));
+            } else  {
+                let op = match op_token {
                 TokenKind::Plus => BinaryOp::Add,
                 TokenKind::Sub => BinaryOp::Sub,
                 TokenKind::Equal => BinaryOp::Equal,
@@ -248,6 +360,7 @@ impl Parser {
                 _ => unreachable!(),
             };
             left = Expr::Binary(Box::new(left), op, Box::new(right));
+            }
         }
         Ok(left)
     }
@@ -255,7 +368,10 @@ impl Parser {
     fn parse_term(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_primary()?;
 
-        while self.match_token(TokenKind::Mul) || self.match_token(TokenKind::Div) || self.match_token(TokenKind::Mod) {
+        while self.match_token(TokenKind::Mul)
+            || self.match_token(TokenKind::Div)
+            || self.match_token(TokenKind::Mod)
+        {
             let op_token = self.previous_token().clone();
             let right = self.parse_primary()?;
             let op = match op_token {
@@ -280,13 +396,15 @@ impl Parser {
             self.consume(TokenKind::RParen, "Expect closing bracket ')'")?;
             return Ok(expr);
         }
-       
+
         if self.match_token(TokenKind::LBracket) {
             let mut elements = Vec::new();
             if !self.check_token(TokenKind::RBracket) {
                 loop {
                     elements.push(self.parse_expression()?);
-                    if !self.match_token(TokenKind::Comma) { break; }
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
                 }
             }
             self.consume(TokenKind::RBracket, "Expected ']' after list elements")?;
@@ -298,18 +416,22 @@ impl Parser {
             if !self.check_token(TokenKind::RBrace) {
                 loop {
                     while self.match_token(TokenKind::NewLine) {}
-                    if self.check_token(TokenKind::RBrace) { break; }
+                    if self.check_token(TokenKind::RBrace) {
+                        break;
+                    }
 
                     let key = self.parse_expression()?;
                     self.consume(TokenKind::Colon, "Expected ':' after map key")?;
-                    
+
                     while self.match_token(TokenKind::NewLine) {}
 
                     let val = self.parse_expression()?;
                     entries.push((key, val));
 
                     while self.match_token(TokenKind::NewLine) {}
-                    if !self.match_token(TokenKind::Comma) { break; }
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
                 }
             }
             while self.match_token(TokenKind::NewLine) {}
@@ -335,7 +457,9 @@ impl Parser {
                 if !self.check_token(TokenKind::RParen) {
                     loop {
                         args.push(self.parse_expression()?);
-                        if !self.match_token(TokenKind::Comma) { break; }
+                        if !self.match_token(TokenKind::Comma) {
+                            break;
+                        }
                     }
                 }
                 self.consume(TokenKind::RParen, "Expected ')' after arguments")?;
@@ -355,7 +479,9 @@ impl Parser {
                     if !self.check_token(TokenKind::RParen) {
                         loop {
                             args.push(self.parse_expression()?);
-                            if !self.match_token(TokenKind::Comma) { break; }
+                            if !self.match_token(TokenKind::Comma) {
+                                break;
+                            }
                         }
                     }
                     self.consume(TokenKind::RParen, "Expected ')' after arguments")?;
@@ -368,7 +494,7 @@ impl Parser {
                 break;
             }
         }
-        
+
         Ok(expr)
     }
 
@@ -391,7 +517,9 @@ impl Parser {
                     expr_str.push(chars[i]);
                     i += 1;
                 }
-                if i < chars.len() { i += 1; }
+                if i < chars.len() {
+                    i += 1;
+                }
 
                 let code_inside = expr_str.trim();
                 if !code_inside.is_empty() {
@@ -423,11 +551,7 @@ impl Parser {
 
         let mut expr = parts[0].clone();
         for next_part in parts.into_iter().skip(1) {
-            expr = Expr::Binary(
-                Box::new(expr),
-                BinaryOp::Add,
-                Box::new(next_part)
-            );
+            expr = Expr::Binary(Box::new(expr), BinaryOp::Add, Box::new(next_part));
         }
         Ok(expr)
     }
@@ -446,7 +570,11 @@ impl Parser {
             None
         };
 
-        Ok(Stmt::If { condition, then_branch, else_branch })
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
     }
 
     fn current_token(&self) -> &TokenKind {
@@ -480,7 +608,7 @@ impl Parser {
     fn consume(&mut self, expected: TokenKind, err_msg: &str) -> Result<(), ParseError> {
         if self.match_token(expected) {
             return Ok(());
-        } 
+        }
         Err(self.error(err_msg))
     }
 

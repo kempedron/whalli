@@ -12,13 +12,13 @@ pub enum TokenKind {
     MulAssign,
     DivAssign,
     ModAssign,
-    LParen, // (
-    RParen, // )
+    LParen,    // (
+    RParen,    // )
     Semicolon, // ;
-    NewLine, // \n
-    Comma, // ,
-    Colon, // :
-    Dot, // .
+    NewLine,   // \n
+    Comma,     // ,
+    Colon,     // :
+    Dot,       // .
     Float(f64),
     Int(i64),
     True,
@@ -36,7 +36,7 @@ pub enum TokenKind {
     Or,
     Not,
     Equal,
-    Less, // <
+    Less,    // <
     Greater, // >
     While,
     LBracket, // [
@@ -46,6 +46,10 @@ pub enum TokenKind {
     Break,
     Continue,
     Import,
+    Struct,
+    Impl,
+    Is,
+    Interface,
     Eof,
 }
 
@@ -69,11 +73,19 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(input: &str) -> Self {
-        Lexer { chars: input.chars().collect(), pos: 0, line: 1, nesting: 0 }
+        Lexer {
+            chars: input.chars().collect(),
+            pos: 0,
+            line: 1,
+            nesting: 0,
+        }
     }
 
     fn make_token(&self, kind: TokenKind) -> Token {
-        Token { kind, line: self.line }
+        Token {
+            kind,
+            line: self.line,
+        }
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, LexError> {
@@ -98,7 +110,9 @@ impl Lexer {
                 }
                 ')' => {
                     tokens.push(self.make_token(TokenKind::RParen));
-                    if self.nesting > 0 { self.nesting -= 1; }
+                    if self.nesting > 0 {
+                        self.nesting -= 1;
+                    }
                     self.pos += 1;
                 }
                 '{' => {
@@ -116,7 +130,9 @@ impl Lexer {
                 }
                 ']' => {
                     tokens.push(self.make_token(TokenKind::RBracket));
-                    if self.nesting > 0 { self.nesting -= 1; }
+                    if self.nesting > 0 {
+                        self.nesting -= 1;
+                    }
                     self.pos += 1;
                 }
                 ':' => {
@@ -157,8 +173,8 @@ impl Lexer {
                 '/' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '/' {
                         while self.pos < self.chars.len() && self.chars[self.pos] != '\n' {
-                            self.pos += 1;   
-                        }                    
+                            self.pos += 1;
+                        }
                     } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
                         tokens.push(self.make_token(TokenKind::DivAssign));
@@ -223,7 +239,7 @@ impl Lexer {
                             } else {
                                 s.push(ch);
                             }
-                            self.pos += 1;   
+                            self.pos += 1;
                         }
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::FStr(s)));
@@ -257,9 +273,9 @@ impl Lexer {
                         self.pos += 1;
                     }
                     self.pos += 1;
-                    tokens.push(self.make_token(TokenKind::Str(s)));    
+                    tokens.push(self.make_token(TokenKind::Str(s)));
                 }
-                
+
                 c if c.is_ascii_digit() => {
                     tokens.push(self.read_number());
                 }
@@ -298,6 +314,10 @@ impl Lexer {
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "import" => TokenKind::Import,
+            "struct" => TokenKind::Struct,
+            "impl" => TokenKind::Impl,
+            "is" =>TokenKind::Is,
+            "interface" => TokenKind::Interface,
             _ => TokenKind::Identifier(word),
         }
     }
@@ -305,8 +325,12 @@ impl Lexer {
     fn read_number(&mut self) -> Token {
         let mut num_str = String::new();
         let mut is_float = false;
-        
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.' || self.chars[self.pos] == '_') {
+
+        while self.pos < self.chars.len()
+            && (self.chars[self.pos].is_ascii_digit()
+                || self.chars[self.pos] == '.'
+                || self.chars[self.pos] == '_')
+        {
             let ch = self.chars[self.pos];
             if ch == '_' {
                 self.pos += 1;
@@ -326,10 +350,12 @@ impl Lexer {
             self.make_token(TokenKind::Int(val))
         }
     }
-    
+
     fn read_word(&mut self) -> String {
         let mut word = String::new();
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_alphanumeric() || self.chars[self.pos] == '_') {
+        while self.pos < self.chars.len()
+            && (self.chars[self.pos].is_alphanumeric() || self.chars[self.pos] == '_')
+        {
             word.push(self.chars[self.pos]);
             self.pos += 1;
         }

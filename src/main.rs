@@ -1,19 +1,19 @@
-mod value;
-mod opcode;
-mod vm;
 mod ast;
 mod compiler;
-mod lexer;
-mod parser;
 mod heap;
+mod lexer;
+mod opcode;
+mod parser;
 pub mod stdlib;
+mod value;
+mod vm;
 
+use compiler::Compiler;
 use lexer::Lexer;
 use parser::Parser;
-use compiler::Compiler;
-use vm::VM;
-use std::fs;
 use std::env;
+use std::fs;
+use vm::VM;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -26,14 +26,14 @@ fn main() -> std::io::Result<()> {
         Err(err) => {
             println!("Traceback (most recent call last):");
             println!("  File \"{}\", line {}", filename, err.line);
-            
+
             let lines: Vec<&str> = source_code.lines().collect();
             if err.line > 0 && err.line <= lines.len() {
                 let code_line = lines[err.line - 1].trim();
                 println!("    {}", code_line);
                 println!("    \x1b[31m{}\x1b[0m", "^".repeat(code_line.len()));
             }
-            
+
             println!("\x1b[31mLexError: {}\x1b[0m", err.message);
             std::process::exit(1);
         }
@@ -45,14 +45,14 @@ fn main() -> std::io::Result<()> {
         Err(err) => {
             println!("Traceback (most recent call last):");
             println!("  File \"{}\", line {}", filename, err.line);
-            
+
             let lines: Vec<&str> = source_code.lines().collect();
             if err.line > 0 && err.line <= lines.len() {
                 let code_line = lines[err.line - 1].trim();
                 println!("    {}", code_line);
                 println!("    \x1b[31m{}\x1b[0m", "^".repeat(code_line.len()));
             }
-            
+
             println!("\x1b[31mSyntaxError: {}\x1b[0m", err.message);
             std::process::exit(1);
         }

@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use crate::{heap::{Heap, Obj}, opcode::OpCode};
+use crate::{
+    heap::{Heap, Obj},
+    opcode::OpCode,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionObj {
@@ -9,7 +12,6 @@ pub struct FunctionObj {
     pub chunk: Vec<OpCode>,
     pub param_types: Vec<String>,
 }
-
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -55,7 +57,12 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
-    pub fn call_method(&self, method_name: &str, args: Vec<Value>, heap: &mut Heap) -> Result<Value, String> {
+    pub fn call_method(
+        &self,
+        method_name: &str,
+        args: Vec<Value>,
+        heap: &mut Heap,
+    ) -> Result<Value, String> {
         match self {
             Value::Str(s) => match method_name {
                 "len" => Ok(Value::Int(s.len() as i64)),
@@ -66,7 +73,9 @@ impl Value {
                 match obj {
                     Obj::List(list) => match method_name {
                         "push" => {
-                            if args.len() != 1 { return Err("'push' expects 1 argument".to_string()); }
+                            if args.len() != 1 {
+                                return Err("'push' expects 1 argument".to_string());
+                            }
                             list.push(args[0].clone());
                             Ok(Value::Nil)
                         }
@@ -77,13 +86,17 @@ impl Value {
                     Obj::Map(map) => match method_name {
                         "len" => Ok(Value::Int(map.len() as i64)),
                         "keys" => {
-                            let keys: Vec<Value> = map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect();
+                            let keys: Vec<Value> =
+                                map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect();
                             let new_id = heap.alloc(Obj::List(keys)); // Выделяем новый список ключей в куче!
                             Ok(Value::ObjRef(new_id))
                         }
                         _ => Err(format!("Method '{}' not found on map", method_name)),
-                    }
-                    _ => Err(format!("Method '{}' not found on this heap object", method_name)),
+                    },
+                    _ => Err(format!(
+                        "Method '{}' not found on this heap object",
+                        method_name
+                    )),
                 }
             }
             _ => Err(format!("Method '{}' not found on this type", method_name)),

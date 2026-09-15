@@ -22,13 +22,14 @@ pub enum UnaryOp {
 pub enum Expr {
     Literal(Value),
     Variable(String),
-    Binary(Box<Expr>,BinaryOp, Box<Expr>),
+    Binary(Box<Expr>, BinaryOp, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     List(Vec<Expr>),
     Map(Vec<(Expr, Expr)>),
     Index(Box<Expr>, Box<Expr>),
     Unary(UnaryOp, Box<Expr>),
-    MethodCall(Box<Expr>,String,Vec<Expr>),
+    MethodCall(Box<Expr>, String, Vec<Expr>),
+    Is(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Debug)]
@@ -44,11 +45,21 @@ pub enum Stmt {
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
     },
-    While { condition: Expr, body: Vec<Stmt> },
-    For {item: String, iterable: Expr, body: Vec<Stmt>},
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        item: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
     Break,
     Continue,
     Block(Vec<Stmt>),
     Import(String),
+    Struct(String, Vec<(String, String)>),
+    Impl(String, Vec<Stmt>),
     Line(usize),
+    Interface(String, Vec<String>),
 }
