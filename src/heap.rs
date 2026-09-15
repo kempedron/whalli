@@ -1,10 +1,12 @@
-use std::collections::HashMap;
-use crate::value::Value;
+use std::{collections::HashMap, rc::Rc};
+use crate::value::{FunctionObj, Value};
 
 #[derive(Debug, Clone)]
 pub enum Obj {
     List(Vec<Value>),
     Map(HashMap<String, Value>),
+    Upvalue(Value),
+    Closure(Rc<FunctionObj>, Vec<usize>),
 }
 
 pub struct HeapObj {
@@ -48,6 +50,14 @@ impl Heap {
                             if let Value::ObjRef(child_id) = val {
                                 worklist.push(*child_id);
                             }
+                        }
+                    }
+                    Obj::Upvalue(val) => {
+                        if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                    }
+                    Obj::Closure(_, upvalues) => {
+                        for upvalue_id in upvalues {
+                            worklist.push(*upvalue_id);
                         }
                     }
                 }

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::value::{FunctionObj, Value};
 
 #[derive(Debug, Clone, PartialEq)]

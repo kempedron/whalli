@@ -1,7 +1,8 @@
-use crate::{heap, opcode::OpCode, value::{FunctionObj, Value}};
+use crate::{heap, opcode::{OpCode, UpvalueLoc}, value::{FunctionObj, Value}};
 use std::{collections::HashMap, rc::Rc};
 
 pub struct CallFrame {
+    pub closure_id: usize,
     pub function: Rc<FunctionObj>,
     pub ip: usize,
     pub stack_offset: usize,
@@ -24,20 +25,24 @@ pub struct VM {
 
 impl VM {
     pub fn new(instructions: Vec<OpCode>) -> Self {
-        let main_func = FunctionObj {
+        let main_func = Rc::new(FunctionObj {
             name: "main".to_string(),
             arity: 0,
             chunk: instructions,
             param_types: vec![],
-        };
+        });
+
+        let mut heap = heap::Heap::new();
+
+        let main_closure_id = heap.alloc(heap::Obj::Closure(main_func.clone(), vec![]));
 
         let initial_frame = CallFrame {
-            function: Rc::new(main_func),
+            closure_id: main_closure_id,
+            function: main_func,
             ip: 0,
             stack_offset: 0,
         };
         
-        let mut heap = heap::Heap::new();
         let (globals, modules) = crate::stdlib::register_natives(&mut heap);
         
         VM {
@@ -208,12 +213,22 @@ impl VM {
                     let callee = self.stack[callee_index].clone();
 
                     match callee {
-                        Value::Function(func) => {
-                            if func.arity != arg_count {
-                                runtime_error!("Function '{}' expects {} arguments, got {}", func.name, func.arity, arg_count);
+                        Value::ObjRef(id) => {
+                            let obj = self.heap.get(id).map_err(|e| RuntimeError { message: e, line: self.current_line })?;
+                            if let heap::Obj::Closure(func, _) = obj {
+                                if func.arity != arg_count {
+                                    runtime_error!("Function '{}' expects {} arguments, got {}", func.name, func.arity, arg_count);
+                                }
+                                let new_frame = CallFrame {
+                                    closure_id: id,
+                                    function: func.clone(),
+                                    ip: 0,
+                                    stack_offset: callee_index + 1,
+                                };
+                                self.frames.push(new_frame);
+                            } else {
+                                runtime_error!("Attempt to call a non-callable object");
                             }
-                            let new_frame = CallFrame { function: func, ip: 0, stack_offset: callee_index + 1 };
-                            self.frames.push(new_frame);
                         }
                         Value::Native(native_fn) => {
                             let mut args = Vec::with_capacity(arg_count);
@@ -224,6 +239,60 @@ impl VM {
                             self.stack.push(result);
                         }
                         _ => runtime_error!("Attempt to call a non-function value"),
+                    }
+                }
+
+                OpCode::MethodCall(method_name, arg_count) => {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count { args.push(pop!()); }
+                    args.reverse();
+                    let obj = pop!();
+                    
+                    let mut is_module_func = false;
+                    
+                    if let Value::ObjRef(id) = &obj {
+                        if let Ok(heap::Obj::Map(map)) = self.heap.get(*id) {
+                            if let Some(val) = map.get(&method_name) {
+                                is_module_func = true;
+                                self.stack.push(val.clone()); 
+                                for arg in &args { self.stack.push(arg.clone()); } 
+                                
+                                let callee_index = self.stack.len() - arg_count - 1;
+                                match self.stack[callee_index].clone() {
+                                    Value::Native(native_fn) => {
+                                        let mut n_args = Vec::new();
+                                        for _ in 0..arg_count { n_args.push(pop!()); }
+                                        n_args.reverse();
+                                        pop!(); 
+                                        let res = native_fn(n_args);
+                                        self.stack.push(res);
+                                    }
+                                    Value::ObjRef(cid) => {
+                                        let obj = self.heap.get(cid).map_err(|e| RuntimeError { message: e, line: self.current_line })?;
+                                        if let heap::Obj::Closure(func, _) = obj {
+                                            if func.arity != arg_count { runtime_error!("Wrong arity"); }
+                                            let new_frame = CallFrame { 
+                                                closure_id: cid, // Передаем ID замыкания!
+                                                function: func.clone(), 
+                                                ip: 0, 
+                                                stack_offset: callee_index + 1 
+                                            };
+                                            self.frames.push(new_frame);
+                                        } else {
+                                            runtime_error!("Property is not callable");
+                                        }
+                                    }
+                                    _ => runtime_error!("Property is not callable"),
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !is_module_func {
+                        match obj.call_method(&method_name, args, &mut self.heap) {
+                            Ok(result) => self.stack.push(result),
+                            Err(err_msg) => runtime_error!("{}", err_msg),
+                        }
                     }
                 }
 
@@ -314,50 +383,6 @@ impl VM {
                         _ => runtime_error!("Invalid target for assignment (only lists and maps are mutable)"),
                     }
                 }
-
-                OpCode::MethodCall(method_name, arg_count) => {
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count { args.push(pop!()); }
-                    args.reverse();
-                    let obj = pop!();
-                    
-                    let mut is_module_func = false;
-                    
-                    if let Value::ObjRef(id) = &obj {
-                        if let Ok(heap::Obj::Map(map)) = self.heap.get(*id) {
-                            if let Some(val) = map.get(&method_name) {
-                                is_module_func = true;
-                                self.stack.push(val.clone()); 
-                                for arg in &args { self.stack.push(arg.clone()); } 
-                                
-                                let callee_index = self.stack.len() - arg_count - 1;
-                                match self.stack[callee_index].clone() {
-                                    Value::Native(native_fn) => {
-                                        let mut n_args = Vec::new();
-                                        for _ in 0..arg_count { n_args.push(pop!()); }
-                                        n_args.reverse();
-                                        pop!(); 
-                                        let res = native_fn(n_args);
-                                        self.stack.push(res);
-                                    }
-                                    Value::Function(func) => {
-                                        if func.arity != arg_count { runtime_error!("Wrong arity"); }
-                                        let new_frame = CallFrame { function: func, ip: 0, stack_offset: callee_index + 1 };
-                                        self.frames.push(new_frame);
-                                    }
-                                    _ => runtime_error!("Property is not callable"),
-                                }
-                            }
-                        }
-                    }
-                    
-                    if !is_module_func {
-                        match obj.call_method(&method_name, args, &mut self.heap) {
-                            Ok(result) => self.stack.push(result),
-                            Err(err_msg) => runtime_error!("{}", err_msg),
-                        }
-                    }
-                }
                 
                 OpCode::Import(module_name) => {
                     if let Some(module_val) = self.modules.get(&module_name) {
@@ -430,6 +455,54 @@ impl VM {
                 }
                 OpCode::Pop => { pop!(); }
                 OpCode::SetLine(line) => { self.current_line = line; }
+                OpCode::Closure(func, upvalues) => {
+                    let mut captured = Vec::new();
+                    for loc in upvalues {
+                        match loc {
+                            UpvalueLoc::Local(idx) => {
+                                let offset = self.frames[frame_idx].stack_offset;
+                                let val = self.stack[offset + idx].clone();
+                                let upvalue_id = self.heap.alloc(heap::Obj::Upvalue(val));
+                                captured.push(upvalue_id);
+                            }
+                            UpvalueLoc::Upvalue(idx) => {
+                                let current_closure_id = self.frames[frame_idx].closure_id;
+                                if let Ok(heap::Obj::Closure(_, upvs)) = self.heap.get(current_closure_id){
+                                    captured.push(upvs[idx]);
+                                }
+                            }
+                        }
+                    }
+                    
+                    let closure_id = self.heap.alloc(heap::Obj::Closure(func, captured));
+                    self.stack.push(Value::ObjRef(closure_id));
+                }
+                OpCode::GetUpvalue(idx) => {
+                    let closure_id = self.frames[frame_idx].closure_id;
+                    if let Ok(heap::Obj::Closure(_, upvs)) = self.heap.get(closure_id) {
+                        let upvalue_id = upvs[idx];
+                        if let Ok(heap::Obj::Upvalue(val)) = self.heap.get(upvalue_id) {
+                            self.stack.push(val.clone());
+                        }
+                    }
+                }
+
+                OpCode::SetUpvalue(idx) => {
+                    let val = pop!();
+                    let closure_id = self.frames[frame_idx].closure_id;
+                    
+                    let upvalue_id = {
+                        if let Ok(heap::Obj::Closure(_, upvs)) = self.heap.get(closure_id) {
+                            upvs[idx]
+                        } else {
+                            unreachable!()
+                        }
+                    };
+                    
+                    if let Ok(heap::Obj::Upvalue(inner)) = self.heap.get_mut(upvalue_id) {
+                        *inner = val;
+                    }
+                }
             }
         }
         Ok(())

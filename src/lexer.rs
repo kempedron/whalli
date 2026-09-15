@@ -329,7 +329,7 @@ impl Lexer {
     
     fn read_word(&mut self) -> String {
         let mut word = String::new();
-        while self.pos < self.chars.len() && (self.chars[self.pos].is_alphabetic() || self.chars[self.pos] == '_') {
+        while self.pos < self.chars.len() && (self.chars[self.pos].is_alphanumeric() || self.chars[self.pos] == '_') {
             word.push(self.chars[self.pos]);
             self.pos += 1;
         }

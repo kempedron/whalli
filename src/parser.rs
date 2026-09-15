@@ -94,6 +94,8 @@ impl Parser {
                 _ => return Err(self.error("Expect function name after 'func'")),
             };
 
+            self.consume(TokenKind::LParen, "Expect '(' after function name")?;
+
             let mut params: Vec<String> = Vec::new();
             if !self.check_token(TokenKind::RParen) {
                 loop {
