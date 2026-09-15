@@ -1,4 +1,10 @@
-use crate::value::Value;
+use crate::value::{FunctionObj, Value};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpvalueLoc {
+    Local(usize),
+    Upvalue(usize),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
@@ -31,4 +37,7 @@ pub enum OpCode {
     Not,
     SetLine(usize),
     Import(String),
+    GetUpvalue(usize),
+    SetUpvalue(usize),
+    Closure(Rc<FunctionObj>, Vec<UpvalueLoc>),
 }

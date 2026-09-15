@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::RefCell;
+use crate::heap::{Heap, Obj};
 use crate::value::Value;
 
-pub fn register() -> Value {
+
+pub fn register(heap: &mut Heap) -> Value {
     let mut math_module = HashMap::new();
     
     math_module.insert("pi".to_string(), Value::Float(std::f64::consts::PI));
@@ -15,5 +15,6 @@ pub fn register() -> Value {
         }
     }));
 
-    Value::Map(Rc::new(RefCell::new(math_module)))
+    let id  = heap.alloc(Obj::Map(math_module));
+    Value::ObjRef(id)
 }

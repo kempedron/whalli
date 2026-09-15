@@ -3,9 +3,9 @@ mod fs;
 mod time;
 
 use std::collections::HashMap;
-use crate::value::Value;
+use crate::{heap::Heap, value::Value};
 
-pub fn register_natives() -> (HashMap<String, Value>, HashMap<String, Value>) {
+pub fn register_natives(heap: &mut Heap) -> (HashMap<String, Value>, HashMap<String, Value>) {
     let mut globals = HashMap::new();
     let mut modules = HashMap::new();
 
@@ -66,9 +66,9 @@ pub fn register_natives() -> (HashMap<String, Value>, HashMap<String, Value>) {
     }));
 
     // modules register
-    modules.insert("math".to_string(), math::register());
-    modules.insert("fs".to_string(), fs::register());
-    modules.insert("time".to_string(), time::register());
+    modules.insert("math".to_string(), math::register(heap));
+    modules.insert("fs".to_string(), fs::register(heap));
+    modules.insert("time".to_string(), time::register(heap));
 
     (globals, modules)
 }

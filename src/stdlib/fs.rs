@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::fs;
 use crate::value::Value;
+use crate::heap::{Heap, Obj};
 
-pub fn register() -> Value {
+pub fn register(heap: &mut Heap) -> Value {
     let mut fs_module = HashMap::new();
     
     fs_module.insert("read".to_string(), Value::Native(|args| {
@@ -30,5 +30,7 @@ pub fn register() -> Value {
         Value::Bool(false)
     }));
 
-    Value::Map(Rc::new(RefCell::new(fs_module)))
+
+    let id = heap.alloc(Obj::Map(fs_module));
+    Value::ObjRef(id)
 }

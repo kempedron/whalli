@@ -7,6 +7,18 @@ pub struct Local {
     pub depth: usize,
 }
 
+pub struct Upvalue {
+    pub index: usize,
+    pub is_local: bool,
+}
+
+pub struct CompilerState {
+    pub function: FunctionObj,
+    pub locals: Vec<Local>,
+    pub upvalues: Vec<Upvalue>,
+    pub scope_depth: usize,
+}
+
 pub struct LoopState {
     pub break_jumps: Vec<usize>,
     pub continue_jumps: Vec<usize>,
@@ -14,7 +26,6 @@ pub struct LoopState {
 }
 pub struct Compiler {
     bytecode: Vec<OpCode>,
-    // lines: Vec<usize>,
     locals: Vec<Local>,
     scope_depth: usize,
     loops: Vec<LoopState>,

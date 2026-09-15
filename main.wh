@@ -1,20 +1,19 @@
-import fs
 import time
-import math
 
-// Проверка приведения типов
-let user_input = "42"
-let age = int(user_input)
-println(f"Возраст через год: {age + 1}")
+println("Начинаем краш-тест памяти!")
+let start = time.now()
 
-let pi_text = str(math.pi)
-println("PI как текст: " + pi_text)
+// Создаем 10 000 циклических ссылок
+let i = 0
+while i < 10000 {
+    let a = []
+    let b = []
+    
+    // a ссылается на b, b ссылается на a (Жесткая циклическая ссылка!)
+    a.push(b)
+    b.push(a)
+    
+    i = i + 1
+}
 
-// Работа с файлами и временем
-let t_start = time.now()
-fs.write("test.txt", "Привет из Whalli!")
-let content = fs.read("test.txt")
-println("Файл содержит: ", content)
-
-time.sleep(1)
-println(f"Прошло времени: {time.now() - t_start} сек.")
+println(f"Тест пройден за {time.now() - start} сек!")

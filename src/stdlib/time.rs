@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::thread;
 use std::time::Duration;
-use std::rc::Rc;
-use std::cell::RefCell;
+use crate::heap::{Heap, Obj};
 use crate::value::Value;
 
-pub fn register() -> Value {
+pub fn register(heap: &mut Heap) -> Value {
     let mut time_module = HashMap::new();
     
     time_module.insert("now".to_string(), Value::Native(|_| {
@@ -27,5 +26,6 @@ pub fn register() -> Value {
         Value::Nil
     }));
 
-    Value::Map(Rc::new(RefCell::new(time_module)))
+    let id = heap.alloc(Obj::Map(time_module));
+    Value::ObjRef(id)
 }
