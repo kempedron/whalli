@@ -30,13 +30,14 @@ pub struct CompilerState {
 }
 
 impl CompilerState {
-    pub fn new(name: String, arity: usize) -> Self {
+    pub fn new(name: String, arity: usize, return_type: Option<String>) -> Self {
         CompilerState {
             function: FunctionObj {
                 name,
                 arity,
                 chunk: Vec::new(),
                 param_types: Vec::new(),
+                return_type,
             },
             locals: Vec::new(),
             upvalues: Vec::new(),
@@ -53,7 +54,7 @@ pub struct Compiler {
 impl Compiler {
     pub fn new() -> Self {
         Compiler {
-            states: vec![CompilerState::new("main".to_string(), 0)],
+            states: vec![CompilerState::new("main".to_string(), 0, None)],
         }
     }
 
@@ -170,19 +171,31 @@ impl Compiler {
                 }
             }
 
-            Stmt::Functions(name, params, body) => {
+            Stmt::Functions(name, params, return_type, body) => {
                 let arity = params.len();
-                let mut new_state = CompilerState::new(name.clone(), arity);
+                let mut new_state = CompilerState::new(name.clone(), arity, return_type.clone());
                 new_state.scope_depth = 1;
 
-                for param in params {
+                for (param_name, _param_type) in params {
                     new_state.locals.push(Local {
-                        name: param.clone(),
+                        name: param_name.clone(),
                         depth: 1,
                     });
                 }
 
                 self.states.push(new_state);
+
+                for (i, (param_name, param_type)) in params.iter().enumerate() {
+                    if let Some(t) = param_type {
+                        self.emit(OpCode::LoadLocal(i));
+                        self.emit(OpCode::LoadGlobal(t.clone()));
+                        self.emit(OpCode::CheckIs);
+                        self.emit(OpCode::Assert(format!(
+                            "TypeError: param {} must implement {}",
+                            param_name, t
+                        )));
+                    }
+                }
 
                 for s in body {
                     self.compile_stmt(s);
@@ -435,43 +448,92 @@ impl Compiler {
 
             Stmt::Impl(target_name, methods) => {
                 self.emit(OpCode::LoadGlobal(target_name.clone()));
-                
+
                 for method in methods {
-                    if let Stmt::Functions(name, params, body) = method {
+                    if let Stmt::Functions(name, params, return_type, body) = method {
                         let arity = params.len();
-                        let mut new_state = CompilerState::new(name.clone(), arity);
+                        let mut new_state =
+                            CompilerState::new(name.clone(), arity, return_type.clone());
                         new_state.scope_depth = 1;
 
-                        for param in params {
-                            new_state.locals.push(Local { name: param.clone(), depth: 1 });
+                        for (param_name, _param_type) in params {
+                            new_state.locals.push(Local {
+                                name: param_name.clone(),
+                                depth: 1,
+                            });
                         }
 
                         self.states.push(new_state);
-                        for s in body { self.compile_stmt(s); }
+
+                        for (i, (param_name, param_type)) in params.iter().enumerate() {
+                            if let Some(t) = param_type {
+                                self.emit(OpCode::LoadLocal(i));
+                                self.emit(OpCode::LoadGlobal(t.clone()));
+                                self.emit(OpCode::CheckIs);
+                                self.emit(OpCode::Assert(format!(
+                                    "TypeError: param {} must implement {}",
+                                    param_name, t
+                                )));
+                            }
+                        }
+
+                        for s in body {
+                            self.compile_stmt(s);
+                        }
+
                         self.emit(OpCode::Push(Value::Nil));
                         self.emit(OpCode::Return);
-                    
+
                         let state = self.states.pop().unwrap();
                         let mut upvalue_locs = Vec::new();
-                        
+
                         for upvalue in state.upvalues {
-                            if upvalue.is_local { upvalue_locs.push(UpvalueLoc::Local(upvalue.index)); }
-                            else { upvalue_locs.push(UpvalueLoc::Upvalue(upvalue.index)); }
+                            if upvalue.is_local {
+                                upvalue_locs.push(UpvalueLoc::Local(upvalue.index));
+                            } else {
+                                upvalue_locs.push(UpvalueLoc::Upvalue(upvalue.index));
+                            }
                         }
 
                         let func_value = Rc::new(state.function);
                         self.emit(OpCode::Closure(func_value, upvalue_locs));
-                        
+
                         self.emit(OpCode::AddMethod(name.clone()));
                     }
                 }
                 self.emit(OpCode::Pop);
             }
-            // Stmt::Interface(, )
-        Stmt::Interface(name, methods) => {
+            Stmt::Interface(name, methods) => {
                 // Создаем интерфейс в памяти и кладем в глобальную переменную (как структуру)
                 self.emit(OpCode::BuildInterface(methods.clone()));
                 self.emit(OpCode::StoreGlobal(name.clone()));
+            }
+            Stmt::LetTuple(names, expr) => {
+                self.compile_expr(expr);
+
+                self.emit(OpCode::UnpackTuple(names.len()));
+
+                let state = self.current_state();
+                if state.scope_depth > 0 {
+                    let depth = state.scope_depth;
+                    for name in names {
+                        self.current_state().locals.push(Local {
+                            name: name.clone(),
+                            depth,
+                        });
+                    }
+                } else {
+                    for name in names.iter().rev() {
+                        self.emit(OpCode::StoreGlobal(name.clone()));
+                    }
+                }
+            }
+            Stmt::Spawn(callee, args) => {
+                self.compile_expr(callee);
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                self.emit(OpCode::Spawn(args.len()));
             }
         }
     }
@@ -552,6 +614,13 @@ impl Compiler {
                 self.compile_expr(left);
                 self.compile_expr(right);
                 self.emit(OpCode::CheckIs);
+            }
+            Expr::Tuple(elements) => {
+                let len = elements.len();
+                for el in elements {
+                    self.compile_expr(el);
+                }
+                self.emit(OpCode::BuildTuple(len));
             }
         }
     }

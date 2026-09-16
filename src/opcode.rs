@@ -46,4 +46,8 @@ pub enum OpCode {
     AddMethod(String),
     BuildInterface(Vec<String>),
     CheckIs,
+    Assert(String),
+    BuildTuple(usize),
+    UnpackTuple(usize),
+    Spawn(usize),
 }

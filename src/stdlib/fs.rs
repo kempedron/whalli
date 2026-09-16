@@ -9,7 +9,7 @@ pub fn register(heap: &mut Heap) -> Value {
 
     fs_module.insert(
         "read".to_string(),
-        Value::Native(|args| {
+        Value::Native(|args, heap| {
             if let Some(Value::Str(path)) = args.first() {
                 match fs::read_to_string(&**path) {
                     Ok(content) => Value::Str(Rc::new(content)),
@@ -23,7 +23,7 @@ pub fn register(heap: &mut Heap) -> Value {
 
     fs_module.insert(
         "write".to_string(),
-        Value::Native(|args| {
+        Value::Native(|args, heap| {
             if args.len() >= 2 {
                 if let (Value::Str(path), Value::Str(content)) = (&args[0], &args[1]) {
                     match fs::write(&**path, &**content) {

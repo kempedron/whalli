@@ -1,7 +1,9 @@
 use std::rc::Rc;
 
 use crate::{
-    ast::{BinaryOp, Expr, Stmt, UnaryOp}, lexer::{Lexer, Token, TokenKind}, value::Value,
+    ast::{BinaryOp, Expr, Stmt, UnaryOp},
+    lexer::{Lexer, Token, TokenKind},
+    value::Value,
 };
 
 pub struct ParseError {
@@ -92,13 +94,14 @@ impl Parser {
             let mut fields = Vec::new();
             while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
                 while self.match_token(TokenKind::NewLine) {}
-                if self.check_token(TokenKind::RBrace) { break; }
+                if self.check_token(TokenKind::RBrace) {
+                    break;
+                }
 
                 let field_token = self.advance().clone();
                 let field_name = match field_token {
                     TokenKind::Identifier(n) => n,
                     _ => Err(self.error("Expected field name"))?,
-
                 };
                 self.consume(TokenKind::Colon, "Expected ':' after field name")?;
 
@@ -127,8 +130,10 @@ impl Parser {
             let mut methods = Vec::new();
             while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
                 while self.match_token(TokenKind::NewLine) {}
-                if self.check_token(TokenKind::RBrace) { break; }
-            
+                if self.check_token(TokenKind::RBrace) {
+                    break;
+                }
+
                 if self.match_token(TokenKind::Function) {
                     methods.push(self.parse_function()?);
                 } else {
@@ -150,10 +155,12 @@ impl Parser {
             let mut methods = Vec::new();
             while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
                 while self.match_token(TokenKind::NewLine) {}
-                if self.check_token(TokenKind::RBrace) { break; }
-                
+                if self.check_token(TokenKind::RBrace) {
+                    break;
+                }
+
                 self.consume(TokenKind::Function, "Expected 'func' in interface body")?;
-                
+
                 let method_token = self.advance().clone();
                 match method_token {
                     TokenKind::Identifier(n) => methods.push(n),
@@ -163,7 +170,7 @@ impl Parser {
                 if self.match_token(TokenKind::LParen) {
                     self.consume(TokenKind::RParen, "Expected ')' after '(' in interface")?;
                 }
-                
+
                 while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
             }
             self.consume(TokenKind::RBrace, "Expected '}' after interface body")?;
@@ -171,16 +178,38 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::Let) {
-            let name_token = self.advance().clone();
-            let name = match name_token {
-                TokenKind::Identifier(n) => n,
-                _ => return Err(self.error("Expect var name after 'let'")),
-            };
-            self.consume(TokenKind::Assign, "Expected '=' sign after variable name")?;
-            let expr = self.parse_expression()?;
-            self.consume_stmt_end()?;
-
-            return Ok(Stmt::Let(name, expr));
+            if self.match_token(TokenKind::LParen) {
+                let mut names = Vec::new();
+                if !self.check_token(TokenKind::RParen) {
+                    loop {
+                        let name_token = self.advance().clone();
+                        match name_token {
+                            TokenKind::Identifier(n) => names.push(n),
+                            _ => {
+                                return Err(
+                                    self.error("Expected variable name in tuple destructuring")
+                                );
+                            }
+                        }
+                        if !self.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.consume(TokenKind::RParen, "Expected ')' after tuple variables")?;
+                self.consume(TokenKind::Assign, "Expected '=' after tuple variables")?;
+                let expr = self.parse_expression()?;
+                return Ok(Stmt::LetTuple(names, expr));
+            } else {
+                let name_token = self.advance().clone();
+                let name = match name_token {
+                    TokenKind::Identifier(n) => n,
+                    _ => return Err(self.error("Expect variable name")),
+                };
+                self.consume(TokenKind::Assign, "Expect '=' after variable name")?;
+                let expr = self.parse_expression()?;
+                return Ok(Stmt::Let(name, expr));
+            }
         }
 
         if self.match_token(TokenKind::Return) {
@@ -235,6 +264,17 @@ impl Parser {
             };
             self.consume_stmt_end()?;
             return Ok(Stmt::Import(module_name));
+        }
+
+        if self.match_token(TokenKind::Wo) {
+            let expr = self.parse_expression()?;
+            self.consume_stmt_end()?;
+            
+            if let Expr::Call(callee, args) = expr {
+                return Ok(Stmt::Spawn(callee, args));
+            } else {
+                return Err(self.error("Expected function call after 'wo'"));
+            }
         }
 
         let expr = self.parse_expression()?;
@@ -298,14 +338,21 @@ impl Parser {
 
         self.consume(TokenKind::LParen, "Expect '(' after function name")?;
 
-        let mut params: Vec<String> = Vec::new();
+        let mut params: Vec<(String, Option<String>)> = Vec::new();
         if !self.check_token(TokenKind::RParen) {
             loop {
                 let param_token = self.advance().clone();
-                match param_token {
-                    TokenKind::Identifier(n) => params.push(n),
+                let param_name = match param_token {
+                    TokenKind::Identifier(n) => n,
                     _ => return Err(self.error("Expect parameter name")),
+                };
+                let mut param_type = None;
+                if self.match_token(TokenKind::Colon) {
+                    param_type = Some(self.parse_type_name()?);
                 }
+
+                params.push((param_name, param_type));
+
                 if !self.match_token(TokenKind::Comma) {
                     break;
                 }
@@ -313,8 +360,13 @@ impl Parser {
         }
         self.consume(TokenKind::RParen, "Expected ')' after parameters")?;
 
+        let mut return_type = None;
+        if self.match_token(TokenKind::Arrow) {
+            return_type = Some(self.parse_type_name()?);
+        }
+
         let body = self.parse_block()?;
-        Ok(Stmt::Functions(name, params, body))
+        Ok(Stmt::Functions(name, params, return_type, body))
     }
 
     fn parse_or(&mut self) -> Result<Expr, ParseError> {
@@ -350,16 +402,16 @@ impl Parser {
 
             if op_token == TokenKind::Is {
                 left = Expr::Is(Box::new(left), Box::new(right));
-            } else  {
+            } else {
                 let op = match op_token {
-                TokenKind::Plus => BinaryOp::Add,
-                TokenKind::Sub => BinaryOp::Sub,
-                TokenKind::Equal => BinaryOp::Equal,
-                TokenKind::Less => BinaryOp::Less,
-                TokenKind::Greater => BinaryOp::Greater,
-                _ => unreachable!(),
-            };
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+                    TokenKind::Plus => BinaryOp::Add,
+                    TokenKind::Sub => BinaryOp::Sub,
+                    TokenKind::Equal => BinaryOp::Equal,
+                    TokenKind::Less => BinaryOp::Less,
+                    TokenKind::Greater => BinaryOp::Greater,
+                    _ => unreachable!(),
+                };
+                left = Expr::Binary(Box::new(left), op, Box::new(right));
             }
         }
         Ok(left)
@@ -392,7 +444,25 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::LParen) {
+            if self.match_token(TokenKind::RParen) {
+                return Ok(Expr::Tuple(Vec::new()));
+            }
             let expr = self.parse_expression()?;
+
+            if self.match_token(TokenKind::Comma) {
+                let mut elements = vec![expr];
+                if !self.check_token(TokenKind::RParen) {
+                    loop {
+                        elements.push(self.parse_expression()?);
+                        if !self.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.consume(TokenKind::RParen, "Expect closing bracket ')'")?;
+                return Ok(Expr::Tuple(elements));
+            }
+
             self.consume(TokenKind::RParen, "Expect closing bracket ')'")?;
             return Ok(expr);
         }
@@ -617,5 +687,28 @@ impl Parser {
             return false;
         }
         *self.current_token() == expected
+    }
+
+    fn parse_type_name(&mut self) -> Result<String, ParseError> {
+        if self.match_token(TokenKind::LParen) {
+            if self.match_token(TokenKind::RParen) {
+                return Ok("()".to_string());
+            }
+            let mut types = Vec::new();
+            loop {
+                types.push(self.parse_type_name()?);
+                if !self.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.consume(TokenKind::RParen, "Expected ')' after tuple type")?;
+            Ok(format!("({})", types.join(", ")))
+        } else {
+            let token = self.advance().clone();
+            match token {
+                TokenKind::Identifier(n) => Ok(n),
+                _ => Err(self.error("Expected type name")),
+            }
+        }
     }
 }

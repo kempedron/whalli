@@ -80,13 +80,17 @@ impl Heap {
                     }
                     Obj::StructDef { methods, .. } => {
                         for val in methods.values() {
-                            if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                            if let Value::ObjRef(child_id) = val {
+                                worklist.push(*child_id);
+                            }
                         }
                     }
                     Obj::Instance { struct_id, fields } => {
                         worklist.push(*struct_id);
                         for val in fields.values() {
-                            if let Value::ObjRef(child_id) = val { worklist.push(*child_id); }
+                            if let Value::ObjRef(child_id) = val {
+                                worklist.push(*child_id);
+                            }
                         }
                     }
                     Obj::Interface(_) => {}

@@ -8,7 +8,7 @@ pub fn register(heap: &mut Heap) -> Value {
     math_module.insert("pi".to_string(), Value::Float(std::f64::consts::PI));
     math_module.insert(
         "sin".to_string(),
-        Value::Native(|args| {
+        Value::Native(|args, heap| {
             if let Value::Float(n) = args[0] {
                 Value::Float(n.sin())
             } else {

@@ -10,7 +10,7 @@ pub fn register(heap: &mut Heap) -> Value {
 
     time_module.insert(
         "now".to_string(),
-        Value::Native(|_| {
+        Value::Native(|args, heap| {
             let start = SystemTime::now();
             let since_epoch = start.duration_since(UNIX_EPOCH).unwrap();
             Value::Float(since_epoch.as_secs_f64())
@@ -19,7 +19,7 @@ pub fn register(heap: &mut Heap) -> Value {
 
     time_module.insert(
         "sleep".to_string(),
-        Value::Native(|args| {
+        Value::Native(|args, heap| {
             if let Some(val) = args.first() {
                 let secs = match val {
                     Value::Float(f) => *f,

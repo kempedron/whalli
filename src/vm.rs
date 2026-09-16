@@ -3,13 +3,14 @@ use crate::{
     opcode::{OpCode, UpvalueLoc},
     value::{FunctionObj, Value},
 };
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::{HashMap, VecDeque}, rc::Rc};
 
 pub struct CallFrame {
     pub closure_id: usize,
     pub function: Rc<FunctionObj>,
     pub ip: usize,
     pub stack_offset: usize,
+    pub base_offset: usize,
 }
 
 pub struct RuntimeError {
@@ -17,9 +18,13 @@ pub struct RuntimeError {
     pub line: usize,
 }
 
+pub struct Task {
+    pub stack: Vec<Value>,
+    pub frames: Vec<CallFrame>,
+}
+
 pub struct VM {
-    stack: Vec<Value>,
-    frames: Vec<CallFrame>,
+    tasks: VecDeque<Task>,
     globals: HashMap<String, Value>,
     modules: HashMap<String, Value>,
     pub heap: heap::Heap,
@@ -34,6 +39,7 @@ impl VM {
             arity: 0,
             chunk: instructions,
             param_types: vec![],
+            return_type: None,
         });
 
         let mut heap = heap::Heap::new();
@@ -45,13 +51,29 @@ impl VM {
             function: main_func,
             ip: 0,
             stack_offset: 0,
+            base_offset: 0,
         };
 
-        let (globals, modules) = crate::stdlib::register_natives(&mut heap);
+        let (mut globals, modules) = crate::stdlib::register_natives(&mut heap);
 
-        VM {
+        let builtins = ["int", "float", "str", "bool", "list", "map", "func"];
+        let mut tasks = VecDeque::new();
+
+        let main_task = Task {
             stack: Vec::new(),
             frames: vec![initial_frame],
+        };
+        tasks.push_back(main_task);
+
+        for builtin in builtins {
+            globals.insert(
+                builtin.to_string(),
+                Value::Str(Rc::new(builtin.to_string())),
+            );
+        }
+
+        VM {
+            tasks,
             globals,
             modules,
             current_line: 1,
@@ -60,26 +82,25 @@ impl VM {
         }
     }
 
-    pub fn collect_garbage(&mut self) {
-        for val in &self.stack {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
+    pub fn collect_garbage(&mut self, current_task: &Task) {
+        for val in &current_task.stack {
+            if let Value::ObjRef(id) = val { self.heap.mark(*id); }
+        }
+
+        for task in &self.tasks {
+            for val in &task.stack {
+                if let Value::ObjRef(id) = val { self.heap.mark(*id); }
             }
         }
 
         for val in self.globals.values() {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
-            }
+            if let Value::ObjRef(id) = val { self.heap.mark(*id); }
         }
-
         for val in self.modules.values() {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
-            }
+            if let Value::ObjRef(id) = val { self.heap.mark(*id); }
         }
 
-        // let freed = self.heap.sweep();
+        // self.heap.sweep();
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
@@ -92,58 +113,64 @@ impl VM {
             };
         }
 
-        macro_rules! pop {
+        while let Some(mut current_task) = self.tasks.pop_front() {
+            macro_rules! pop {
             () => {
-                self.stack.pop().ok_or_else(|| RuntimeError {
-                    message: "Stack underflow (internal VM error)".to_string(),
+                current_task.stack.pop().ok_or_else(|| RuntimeError {
+                    message: "Stack underflow".to_string(),
                     line: self.current_line,
                 })?
             };
         }
-
-        while !self.frames.is_empty() {
             if self.heap.live_count() >= self.gc_threshold {
-                self.collect_garbage();
-
-                self.gc_threshold = std::cmp::max(self.heap.live_count() * 2, 1024)
+                self.collect_garbage(&current_task);
+                self.gc_threshold = std::cmp::max(self.heap.live_count() * 2, 1024);
             }
 
-            let frame_idx = self.frames.len() - 1;
-
-            if self.frames[frame_idx].ip >= self.frames[frame_idx].function.chunk.len() {
-                self.frames.pop();
+            if current_task.frames.is_empty() {
                 continue;
             }
 
-            let instruction =
-                self.frames[frame_idx].function.chunk[self.frames[frame_idx].ip].clone();
-            self.frames[frame_idx].ip += 1;
+            let frame_idx = current_task.frames.len() - 1;
+
+            if current_task.frames[frame_idx].ip >= current_task.frames[frame_idx].function.chunk.len() {
+                current_task.frames.pop();
+                if !current_task.frames.is_empty() {
+                    self.tasks.push_back(current_task);
+                }
+                continue;
+            }
+
+            let instruction = current_task.frames[frame_idx].function.chunk[current_task.frames[frame_idx].ip].clone();
+            current_task.frames[frame_idx].ip += 1;
 
             match instruction {
                 OpCode::Push(val) => {
-                    self.stack.push(val);
+                    current_task.stack.push(val);
                 }
 
                 OpCode::Add => {
                     let b = pop!();
                     let a = pop!();
                     match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x + y)),
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x + y)),
+                        (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x + y)),
+                        (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x + y)),
                         (Value::Int(x), Value::Float(y)) => {
-                            self.stack.push(Value::Float((x as f64) + y))
+                            current_task.stack.push(Value::Float((x as f64) + y))
                         }
                         (Value::Float(x), Value::Int(y)) => {
-                            self.stack.push(Value::Float(x + (y as f64)))
+                            current_task.stack.push(Value::Float(x + (y as f64)))
                         }
                         (Value::Str(x), Value::Str(y)) => {
-                            self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y))))
+                            current_task.stack.push(Value::Str(Rc::new(format!("{}{}", x, y))))
                         }
                         (Value::Str(x), y) => {
-                            self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y))))
+                            let y_str = y.stringify(&self.heap);
+                            current_task.stack.push(Value::Str(Rc::new(format!("{}{}", x, y_str))))
                         }
                         (x, Value::Str(y)) => {
-                            self.stack.push(Value::Str(Rc::new(format!("{}{}", x, y))))
+                            let x_str = x.stringify(&self.heap);
+                            current_task.stack.push(Value::Str(Rc::new(format!("{}{}", x_str, y))))
                         }
                         _ => runtime_error!("Invalid types for '+' operation"),
                     }
@@ -152,13 +179,13 @@ impl VM {
                     let b = pop!();
                     let a = pop!();
                     match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x - y)),
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x - y)),
+                        (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x - y)),
+                        (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x - y)),
                         (Value::Int(x), Value::Float(y)) => {
-                            self.stack.push(Value::Float((x as f64) - y))
+                            current_task.stack.push(Value::Float((x as f64) - y))
                         }
                         (Value::Float(x), Value::Int(y)) => {
-                            self.stack.push(Value::Float(x - (y as f64)))
+                            current_task.stack.push(Value::Float(x - (y as f64)))
                         }
                         _ => runtime_error!("Invalid types for '-' operation"),
                     }
@@ -167,13 +194,13 @@ impl VM {
                     let b = pop!();
                     let a = pop!();
                     match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x * y)),
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x * y)),
+                        (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x * y)),
+                        (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x * y)),
                         (Value::Int(x), Value::Float(y)) => {
-                            self.stack.push(Value::Float((x as f64) * y))
+                            current_task.stack.push(Value::Float((x as f64) * y))
                         }
                         (Value::Float(x), Value::Int(y)) => {
-                            self.stack.push(Value::Float(x * (y as f64)))
+                            current_task.stack.push(Value::Float(x * (y as f64)))
                         }
                         _ => runtime_error!("Invalid types for '*' operation"),
                     }
@@ -186,17 +213,17 @@ impl VM {
                             if y == 0 {
                                 runtime_error!("Division by zero");
                             }
-                            self.stack.push(Value::Int(x / y));
+                            current_task.stack.push(Value::Int(x / y));
                         }
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x / y)),
+                        (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x / y)),
                         (Value::Int(x), Value::Float(y)) => {
-                            self.stack.push(Value::Float((x as f64) / y))
+                            current_task.stack.push(Value::Float((x as f64) / y))
                         }
                         (Value::Float(x), Value::Int(y)) => {
                             if y == 0 {
                                 runtime_error!("Division by zero");
                             }
-                            self.stack.push(Value::Float(x / (y as f64)));
+                            current_task.stack.push(Value::Float(x / (y as f64)));
                         }
                         _ => runtime_error!("Invalid types for '/' operation"),
                     }
@@ -209,17 +236,17 @@ impl VM {
                             if y == 0 {
                                 runtime_error!("Modulo by zero");
                             }
-                            self.stack.push(Value::Int(x % y));
+                            current_task.stack.push(Value::Int(x % y));
                         }
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x % y)),
+                        (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x % y)),
                         (Value::Int(x), Value::Float(y)) => {
-                            self.stack.push(Value::Float((x as f64) % y))
+                            current_task.stack.push(Value::Float((x as f64) % y))
                         }
                         (Value::Float(x), Value::Int(y)) => {
                             if y == 0 {
                                 runtime_error!("Modulo by zero");
                             }
-                            self.stack.push(Value::Float(x % (y as f64)));
+                            current_task.stack.push(Value::Float(x % (y as f64)));
                         }
                         _ => runtime_error!("Invalid types for '%' operation"),
                     }
@@ -231,54 +258,81 @@ impl VM {
                 }
                 OpCode::LoadGlobal(name) => {
                     if let Some(val) = self.globals.get(&name) {
-                        self.stack.push(val.clone());
+                        current_task.stack.push(val.clone());
                     } else {
                         runtime_error!("Undefined variable '{}'", name);
                     }
                 }
                 OpCode::LoadLocal(idx) => {
-                    let offset = self.frames[frame_idx].stack_offset;
-                    let val = self.stack[offset + idx].clone();
-                    self.stack.push(val);
+                    let offset = current_task.frames[frame_idx].stack_offset;
+                    let val = current_task.stack[offset + idx].clone();
+                    current_task.stack.push(val);
                 }
                 OpCode::SetLocal(idx) => {
                     let val = pop!();
-                    let offset = self.frames[frame_idx].stack_offset;
-                    self.stack[offset + idx] = val;
+                    let offset = current_task.frames[frame_idx].stack_offset;
+                    current_task.stack[offset + idx] = val;
                 }
 
                 OpCode::Call(arg_count) => {
-                    let callee_index = self.stack.len() - arg_count - 1;
-                    let callee = self.stack[callee_index].clone();
+                    let callee_index = current_task.stack.len() - arg_count - 1;
+                    let callee = current_task.stack[callee_index].clone();
 
                     match callee {
                         Value::ObjRef(id) => {
-                            let obj = self.heap.get(id).map_err(|e| RuntimeError { message: e, line: self.current_line })?;
+                            let obj = self.heap.get(id).map_err(|e| RuntimeError {
+                                message: e,
+                                line: self.current_line,
+                            })?;
                             match obj {
                                 heap::Obj::Closure(func, _) => {
-                                    if func.arity != arg_count { runtime_error!("Function '{}' expects {} arguments, got {}", func.name, func.arity, arg_count); }
-                                    let new_frame = CallFrame { closure_id: id, function: func.clone(), ip: 0, stack_offset: callee_index + 1 };
-                                    self.frames.push(new_frame);
+                                    if func.arity != arg_count {
+                                        runtime_error!(
+                                            "Function '{}' expects {} arguments, got {}",
+                                            func.name,
+                                            func.arity,
+                                            arg_count
+                                        );
+                                    }
+                                    let new_frame = CallFrame {
+                                        closure_id: id,
+                                        function: func.clone(),
+                                        ip: 0,
+                                        stack_offset: callee_index + 1,
+                                        base_offset: callee_index,
+                                    };
+                                    current_task.frames.push(new_frame);
                                 }
                                 heap::Obj::StructDef { name, fields, .. } => {
-                                    if fields.len() != arg_count { runtime_error!("Struct '{}' expects {} arguments, got {}", name, fields.len(), arg_count); }
+                                    if fields.len() != arg_count {
+                                        runtime_error!(
+                                            "Struct '{}' expects {} arguments, got {}",
+                                            name,
+                                            fields.len(),
+                                            arg_count
+                                        );
+                                    }
                                     let mut instance_fields = HashMap::new();
-                                    
+
                                     let mut args = Vec::with_capacity(arg_count);
-                                    for _ in 0..arg_count { args.push(pop!()); }
+                                    for _ in 0..arg_count {
+                                        args.push(pop!());
+                                    }
                                     args.reverse();
                                     pop!();
-                                    
+
                                     for (i, field_name) in fields.iter().enumerate() {
                                         instance_fields.insert(field_name.clone(), args[i].clone());
                                     }
-                                    
-                                    let instance_id = self.heap.alloc(heap::Obj::Instance { struct_id: id, fields: instance_fields });
-                                    self.stack.push(Value::ObjRef(instance_id));
+
+                                    let instance_id = self.heap.alloc(heap::Obj::Instance {
+                                        struct_id: id,
+                                        fields: instance_fields,
+                                    });
+                                    current_task.stack.push(Value::ObjRef(instance_id));
                                 }
                                 _ => runtime_error!("Attempt to call a non-callable object"),
                             }
-                        
                         }
                         Value::Native(native_fn) => {
                             let mut args = Vec::with_capacity(arg_count);
@@ -287,8 +341,8 @@ impl VM {
                             }
                             args.reverse();
                             pop!();
-                            let result = native_fn(args);
-                            self.stack.push(result);
+                            let result = native_fn(args, &mut self.heap);
+                            current_task.stack.push(result);
                         }
                         _ => runtime_error!("Attempt to call a non-function value"),
                     }
@@ -296,61 +350,91 @@ impl VM {
 
                 OpCode::MethodCall(method_name, arg_count) => {
                     let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count { args.push(pop!()); }
+                    for _ in 0..arg_count {
+                        args.push(pop!());
+                    }
                     args.reverse();
-                    let obj = pop!(); 
-                    
+                    let obj = pop!();
+
                     let mut handled = false;
-                    
+
                     if let Value::ObjRef(id) = &obj {
                         if let Ok(heap::Obj::Instance { struct_id, .. }) = self.heap.get(*id) {
-                            if let Ok(heap::Obj::StructDef { methods, .. }) = self.heap.get(*struct_id) {
+                            if let Ok(heap::Obj::StructDef { methods, .. }) =
+                                self.heap.get(*struct_id)
+                            {
                                 if let Some(method_val) = methods.get(&method_name) {
                                     handled = true;
-                                    
-                                    self.stack.push(obj.clone()); 
-                                    for arg in &args { self.stack.push(arg.clone()); } 
-                                    
-                                    let callee_index = self.stack.len() - arg_count - 1;
-                                    
+
+                                    current_task.stack.push(obj.clone());
+                                    for arg in &args {
+                                        current_task.stack.push(arg.clone());
+                                    }
+
+                                    let callee_index = current_task.stack.len() - arg_count - 1;
+
                                     if let Value::ObjRef(closure_id) = method_val {
-                                        if let Ok(heap::Obj::Closure(func, _)) = self.heap.get(*closure_id) {
-                                            if func.arity != arg_count + 1 { runtime_error!("Method '{}' expects {} arguments (including self), got {}", method_name, func.arity, arg_count + 1); }
-                                            let new_frame = CallFrame { 
-                                                closure_id: *closure_id, 
-                                                function: func.clone(), 
-                                                ip: 0, 
-                                                stack_offset: callee_index 
+                                        if let Ok(heap::Obj::Closure(func, _)) =
+                                            self.heap.get(*closure_id)
+                                        {
+                                            if func.arity != arg_count + 1 {
+                                                runtime_error!(
+                                                    "Method '{}' expects {} arguments (including self), got {}",
+                                                    method_name,
+                                                    func.arity,
+                                                    arg_count + 1
+                                                );
+                                            }
+                                            let new_frame = CallFrame {
+                                                closure_id: *closure_id,
+                                                function: func.clone(),
+                                                ip: 0,
+                                                stack_offset: callee_index,
+                                                base_offset: callee_index,
                                             };
-                                            self.frames.push(new_frame);
+                                            current_task.frames.push(new_frame);
                                         }
                                     }
                                 }
                             }
                         }
-                        
+
                         if !handled {
                             if let Ok(heap::Obj::Map(map)) = self.heap.get(*id) {
                                 if let Some(val) = map.get(&method_name) {
                                     handled = true;
-                                    self.stack.push(val.clone()); 
-                                    for arg in &args { self.stack.push(arg.clone()); } 
-                                    
-                                    let callee_index = self.stack.len() - arg_count - 1;
-                                    match self.stack[callee_index].clone() {
+                                    current_task.stack.push(val.clone());
+                                    for arg in &args {
+                                        current_task.stack.push(arg.clone());
+                                    }
+
+                                    let callee_index = current_task.stack.len() - arg_count - 1;
+                                    match current_task.stack[callee_index].clone() {
                                         Value::Native(native_fn) => {
                                             let mut n_args = Vec::new();
-                                            for _ in 0..arg_count { n_args.push(pop!()); }
+                                            for _ in 0..arg_count {
+                                                n_args.push(pop!());
+                                            }
                                             n_args.reverse();
-                                            pop!(); 
-                                            let res = native_fn(n_args);
-                                            self.stack.push(res);
+                                            pop!();
+                                            let res = native_fn(n_args, &mut self.heap);
+                                            current_task.stack.push(res);
                                         }
                                         Value::ObjRef(cid) => {
-                                            if let Ok(heap::Obj::Closure(func, _)) = self.heap.get(cid) {
-                                                if func.arity != arg_count { runtime_error!("Wrong arity"); }
-                                                let new_frame = CallFrame { closure_id: cid, function: func.clone(), ip: 0, stack_offset: callee_index + 1 };
-                                                self.frames.push(new_frame);
+                                            if let Ok(heap::Obj::Closure(func, _)) =
+                                                self.heap.get(cid)
+                                            {
+                                                if func.arity != arg_count {
+                                                    runtime_error!("Wrong arity");
+                                                }
+                                                let new_frame = CallFrame {
+                                                    closure_id: cid,
+                                                    function: func.clone(),
+                                                    ip: 0,
+                                                    stack_offset: callee_index + 1,
+                                                    base_offset: callee_index,
+                                                };
+                                                current_task.frames.push(new_frame);
                                             }
                                         }
                                         _ => runtime_error!("Property is not callable"),
@@ -359,27 +443,27 @@ impl VM {
                             }
                         }
                     }
-                    
+
                     if !handled {
                         match obj.call_method(&method_name, args, &mut self.heap) {
-                            Ok(result) => self.stack.push(result),
+                            Ok(result) => current_task.stack.push(result),
                             Err(err_msg) => runtime_error!("{}", err_msg),
                         }
                     }
                 }
 
                 OpCode::BuildList(size) => {
-                    let start = self.stack.len() - size;
-                    let elements: Vec<Value> = self.stack.drain(start..).collect();
+                    let start = current_task.stack.len() - size;
+                    let elements: Vec<Value> = current_task.stack.drain(start..).collect();
                     let id = self.heap.alloc(heap::Obj::List(elements));
-                    self.stack.push(Value::ObjRef(id));
+                    current_task.stack.push(Value::ObjRef(id));
                 }
 
                 OpCode::ListLen => {
                     let val = pop!();
                     if let Value::ObjRef(id) = val {
                         if let Ok(heap::Obj::List(list)) = self.heap.get(id) {
-                            self.stack.push(Value::Int(list.len() as i64));
+                            current_task.stack.push(Value::Int(list.len() as i64));
                         }
                     } else {
                         runtime_error!("Attempt to get length of a non-list");
@@ -398,7 +482,7 @@ impl VM {
                         map.insert(key_str, val);
                     }
                     let id = self.heap.alloc(heap::Obj::Map(map));
-                    self.stack.push(Value::ObjRef(id));
+                    current_task.stack.push(Value::ObjRef(id));
                 }
 
                 OpCode::IndexGet => {
@@ -416,32 +500,43 @@ impl VM {
                                     if idx < 0 || idx >= list.len() as i64 {
                                         runtime_error!("Index {} out of bounds", idx);
                                     }
-                                    self.stack.push(list[idx as usize].clone());
+                                    current_task.stack.push(list[idx as usize].clone());
                                 }
                                 (crate::heap::Obj::Map(map), Value::Str(key)) => {
                                     let val = map.get(&*key).unwrap_or(&Value::Nil);
-                                    self.stack.push(val.clone());
+                                    current_task.stack.push(val.clone());
                                 }
                                 (crate::heap::Obj::Instance { fields, .. }, Value::Str(key)) => {
                                     let val = fields.get(&*key).unwrap_or(&Value::Nil);
-                                    self.stack.push(val.clone());
+                                    current_task.stack.push(val.clone());
                                 }
-
                                 _ => runtime_error!("Invalid index type for collection"),
                             }
                         }
+
                         Value::Str(s) => {
                             if let Value::Int(idx) = index {
                                 if idx < 0 || idx >= s.len() as i64 {
                                     runtime_error!("String index out of bounds");
                                 }
                                 let ch = s.chars().nth(idx as usize).unwrap().to_string();
-                                self.stack.push(Value::Str(std::rc::Rc::new(ch)));
+                                current_task.stack.push(Value::Str(std::rc::Rc::new(ch)));
                             } else {
                                 runtime_error!("String index must be integer");
                             }
                         }
-                        
+
+                        Value::Tuple(elements) => {
+                            if let Value::Int(idx) = index {
+                                if idx < 0 || (idx as usize) >= elements.len() {
+                                    runtime_error!("Tuple index out of bounds");
+                                }
+                                current_task.stack.push(elements[idx as usize].clone());
+                            } else {
+                                runtime_error!("Tuple index must be an integer");
+                            }
+                        }
+
                         _ => runtime_error!("Invalid target for reading index"),
                     }
                 }
@@ -488,30 +583,43 @@ impl VM {
                 }
 
                 OpCode::Return => {
-                    let result = self.stack.pop().unwrap_or(Value::Nil);
-                    let frame = self.frames.pop().unwrap();
+                    let result = current_task.stack.pop().unwrap_or(Value::Nil);
+                    let frame = current_task.frames.pop().unwrap();
 
-                    if frame.stack_offset > 0 {
-                        self.stack.truncate(frame.stack_offset - 1);
+                    if let Some(expected_type) = &frame.function.return_type {
+                        let type_val = self
+                            .globals
+                            .get(expected_type)
+                            .cloned()
+                            .unwrap_or_else(|| Value::Str(Rc::new(expected_type.clone())));
+
+                        if !self.is_type_match(&result, &type_val) {
+                            runtime_error!(
+                                "TypeError: function {} expected to return {}, but got {}",
+                                frame.function.name,
+                                expected_type,
+                                type_val
+                            );
+                        }
                     }
-                    if !self.frames.is_empty() {
-                        self.stack.push(result);
-                    }
+
+                    current_task.stack.truncate(frame.base_offset);
+                    current_task.stack.push(result);
                 }
 
                 OpCode::JumpIfFalse(target_ip) => {
                     let condition = pop!();
                     if let Value::Bool(false) = condition {
-                        self.frames[frame_idx].ip = target_ip;
+                        current_task.frames[frame_idx].ip = target_ip;
                     }
                 }
                 OpCode::Jump(target_ip) => {
-                    self.frames[frame_idx].ip = target_ip;
+                    current_task.frames[frame_idx].ip = target_ip;
                 }
                 OpCode::Equal => {
                     let b = pop!();
                     let a = pop!();
-                    self.stack.push(Value::Bool(a == b));
+                    current_task.stack.push(Value::Bool(a == b));
                 }
                 OpCode::Less => {
                     let b = pop!();
@@ -523,7 +631,7 @@ impl VM {
                         (Value::Float(x), Value::Int(y)) => x < (y as f64),
                         _ => runtime_error!("Invalid types for '<' operation"),
                     };
-                    self.stack.push(Value::Bool(res));
+                    current_task.stack.push(Value::Bool(res));
                 }
                 OpCode::Greater => {
                     let b = pop!();
@@ -535,13 +643,13 @@ impl VM {
                         (Value::Float(x), Value::Int(y)) => x > (y as f64),
                         _ => runtime_error!("Invalid types for '>' operation"),
                     };
-                    self.stack.push(Value::Bool(res));
+                    current_task.stack.push(Value::Bool(res));
                 }
                 OpCode::And => {
                     let b = pop!();
                     let a = pop!();
                     if let (Value::Bool(x), Value::Bool(y)) = (a, b) {
-                        self.stack.push(Value::Bool(x && y));
+                        current_task.stack.push(Value::Bool(x && y));
                     } else {
                         runtime_error!("'and' expects booleans");
                     }
@@ -550,7 +658,7 @@ impl VM {
                     let b = pop!();
                     let a = pop!();
                     if let (Value::Bool(x), Value::Bool(y)) = (a, b) {
-                        self.stack.push(Value::Bool(x || y));
+                        current_task.stack.push(Value::Bool(x || y));
                     } else {
                         runtime_error!("'or' expects booleans");
                     }
@@ -558,7 +666,7 @@ impl VM {
                 OpCode::Not => {
                     let a = pop!();
                     if let Value::Bool(x) = a {
-                        self.stack.push(Value::Bool(!x));
+                        current_task.stack.push(Value::Bool(!x));
                     } else {
                         runtime_error!("'not' expects a boolean");
                     }
@@ -574,13 +682,13 @@ impl VM {
                     for loc in upvalues {
                         match loc {
                             UpvalueLoc::Local(idx) => {
-                                let offset = self.frames[frame_idx].stack_offset;
-                                let val = self.stack[offset + idx].clone();
+                                let offset = current_task.frames[frame_idx].stack_offset;
+                                let val = current_task.stack[offset + idx].clone();
                                 let upvalue_id = self.heap.alloc(heap::Obj::Upvalue(val));
                                 captured.push(upvalue_id);
                             }
                             UpvalueLoc::Upvalue(idx) => {
-                                let current_closure_id = self.frames[frame_idx].closure_id;
+                                let current_closure_id = current_task.frames[frame_idx].closure_id;
                                 if let Ok(heap::Obj::Closure(_, upvs)) =
                                     self.heap.get(current_closure_id)
                                 {
@@ -591,21 +699,21 @@ impl VM {
                     }
 
                     let closure_id = self.heap.alloc(heap::Obj::Closure(func, captured));
-                    self.stack.push(Value::ObjRef(closure_id));
+                    current_task.stack.push(Value::ObjRef(closure_id));
                 }
                 OpCode::GetUpvalue(idx) => {
-                    let closure_id = self.frames[frame_idx].closure_id;
+                    let closure_id = current_task.frames[frame_idx].closure_id;
                     if let Ok(heap::Obj::Closure(_, upvs)) = self.heap.get(closure_id) {
                         let upvalue_id = upvs[idx];
                         if let Ok(heap::Obj::Upvalue(val)) = self.heap.get(upvalue_id) {
-                            self.stack.push(val.clone());
+                            current_task.stack.push(val.clone());
                         }
                     }
                 }
 
                 OpCode::SetUpvalue(idx) => {
                     let val = pop!();
-                    let closure_id = self.frames[frame_idx].closure_id;
+                    let closure_id = current_task.frames[frame_idx].closure_id;
 
                     let upvalue_id = {
                         if let Ok(heap::Obj::Closure(_, upvs)) = self.heap.get(closure_id) {
@@ -623,13 +731,13 @@ impl VM {
                     let id = self.heap.alloc(heap::Obj::StructDef {
                         name,
                         fields,
-                        methods: HashMap::new(), 
+                        methods: HashMap::new(),
                     });
-                    self.stack.push(Value::ObjRef(id));
+                    current_task.stack.push(Value::ObjRef(id));
                 }
                 OpCode::AddMethod(name) => {
                     let method = pop!();
-                    let struct_val = self.stack.last().unwrap().clone();
+                    let struct_val = current_task.stack.last().unwrap().clone();
                     if let Value::ObjRef(id) = struct_val {
                         if let Ok(heap::Obj::StructDef { methods, .. }) = self.heap.get_mut(id) {
                             methods.insert(name, method);
@@ -638,33 +746,161 @@ impl VM {
                 }
                 OpCode::BuildInterface(methods) => {
                     let id = self.heap.alloc(heap::Obj::Interface(methods));
-                    self.stack.push(Value::ObjRef(id));
+                    current_task.stack.push(Value::ObjRef(id));
                 }
                 OpCode::CheckIs => {
                     let right = pop!();
                     let left = pop!();
-                    
-                    let mut is_match = false;
-                    
-                    if let Value::ObjRef(iface_id) = right {
-                        if let Ok(heap::Obj::Interface(required_methods)) = self.heap.get(iface_id) {
-                            
-                            if let Value::ObjRef(inst_id) = left {
-                                if let Ok(heap::Obj::Instance { struct_id, .. }) = self.heap.get(inst_id) {
-                                    
-                                    if let Ok(heap::Obj::StructDef { methods, .. }) = self.heap.get(*struct_id) {
-                                        
-                                        is_match = required_methods.iter().all(|m| methods.contains_key(m));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    self.stack.push(Value::Bool(is_match));
+
+                    let is_match = self.is_type_match(&left, &right);
+
+                    current_task.stack.push(Value::Bool(is_match));
                 }
+                OpCode::Assert(msg) => {
+                    let cond = pop!();
+                    if let Value::Bool(false) = cond {
+                        runtime_error!("{}", msg);
+                    }
+                }
+                OpCode::BuildTuple(len) => {
+                    let mut elements = Vec::with_capacity(len);
+                    for _ in 0..len {
+                        elements.push(pop!());
+                    }
+                    elements.reverse();
+                    current_task.stack.push(Value::Tuple(Rc::new(elements)));
+                }
+                OpCode::UnpackTuple(expected_len) => {
+                    let obj = pop!();
+                    if let Value::Tuple(elements) = obj {
+                        if elements.len() != expected_len {
+                            runtime_error!(
+                                "Cannot unpack tuple of length {} into {} variables",
+                                elements.len(),
+                                expected_len
+                            );
+                        }
+                        for el in elements.iter() {
+                            current_task.stack.push(el.clone());
+                        }
+                    } else {
+                        runtime_error!("Cannot unpack non-tuple value");
+                    }
+                }
+                OpCode::Spawn(arg_count) => {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(pop!());
+                    }
+                    args.reverse();
+                    let callee = pop!();
+
+                    if let Value::ObjRef(id) = callee {
+                        if let Ok(heap::Obj::Closure(func, _)) = self.heap.get(id) {
+                            if func.arity != arg_count {
+                                runtime_error!("Spawned function expects {} args", func.arity);
+                            }
+
+                            let mut new_task = Task {
+                                stack: Vec::new(),
+                                frames: Vec::new(),
+                            };
+
+                            new_task.stack.push(callee.clone());
+                            for arg in &args {
+                                new_task.stack.push(arg.clone());
+                            }
+
+                            let new_frame = CallFrame {
+                                closure_id: id,
+                                function: func.clone(),
+                                ip: 0,
+                                stack_offset: 1,
+                                base_offset: 0,
+                            };
+                            new_task.frames.push(new_frame);
+                            self.tasks.push_back(new_task);
+                        } else {
+                            runtime_error!("Can only spawn functions");
+                        }
+                    } else {
+                        runtime_error!("Can only spawn functions");
+                    }
+                }
+            }
+
+            // Возвращаем активную задачу обратно в очередь планировщика
+            if !current_task.frames.is_empty() {
+                self.tasks.push_back(current_task);
             }
         }
         Ok(())
+    }
+
+    fn is_type_match(&self, obj: &Value, type_val: &Value) -> bool {
+        if let Value::Str(type_name) = type_val {
+            match (obj, type_name.as_str()) {
+                (Value::Int(_), "int") => true,
+                (Value::Float(_), "float") => true,
+                (Value::Str(_), "str") => true,
+                (Value::Bool(_), "bool") => true,
+                (Value::ObjRef(id), "list") => {
+                    matches!(self.heap.get(*id), Ok(crate::heap::Obj::List(_)))
+                }
+                (Value::ObjRef(id), "map") => {
+                    matches!(self.heap.get(*id), Ok(crate::heap::Obj::Map(_)))
+                }
+                (Value::ObjRef(id), "func") => {
+                    matches!(self.heap.get(*id), Ok(crate::heap::Obj::Closure(_, _)))
+                }
+                (Value::Tuple(_), "tuple") => true,
+
+                (Value::Tuple(elements), t_str)
+                    if t_str.starts_with('(') && t_str.ends_with(')') =>
+                {
+                    let inner = &t_str[1..t_str.len() - 1];
+                    if inner.trim().is_empty() {
+                        return elements.is_empty();
+                    }
+
+                    let type_parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                    if elements.len() != type_parts.len() {
+                        return false;
+                    }
+
+                    for (el, t_part) in elements.iter().zip(type_parts.iter()) {
+                        let t_val = self
+                            .globals
+                            .get(*t_part)
+                            .cloned()
+                            .unwrap_or_else(|| Value::Str(Rc::new(t_part.to_string())));
+                        if !self.is_type_match(el, &t_val) {
+                            return false;
+                        }
+                    }
+                    true
+                }
+                _ => false,
+            }
+        } else if let Value::ObjRef(right_id) = type_val {
+            if let Value::ObjRef(left_id) = obj {
+                if let Ok(crate::heap::Obj::Instance { struct_id, .. }) = self.heap.get(*left_id) {
+                    if right_id == struct_id {
+                        return true;
+                    } else if let Ok(crate::heap::Obj::Interface(required_methods)) =
+                        self.heap.get(*right_id)
+                    {
+                        if let Ok(crate::heap::Obj::StructDef { methods, .. }) =
+                            self.heap.get(*struct_id)
+                        {
+                            return required_methods.iter().all(|m| methods.contains_key(m));
+                        }
+                    }
+                }
+            }
+            false
+        } else {
+            false
+        }
     }
 }

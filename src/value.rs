@@ -11,6 +11,7 @@ pub struct FunctionObj {
     pub arity: usize,
     pub chunk: Vec<OpCode>,
     pub param_types: Vec<String>,
+    pub return_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,8 +22,9 @@ pub enum Value {
     Float(f64),
     Str(Rc<String>),
     Function(Rc<FunctionObj>),
-    Native(fn(Vec<Value>) -> Value),
+    Native(fn(Vec<Value>, &mut crate::heap::Heap) -> Value),
     ObjRef(usize),
+    Tuple(Rc<Vec<Value>>),
 }
 
 impl PartialEq for Value {
@@ -52,6 +54,10 @@ impl std::fmt::Display for Value {
             Value::Function(func) => write!(f, "<func {}>", func.name),
             Value::Native(_) => write!(f, "<native>"),
             Value::ObjRef(id) => write!(f, "<object #{}>", id),
+            Value::Tuple(elements) => {
+                let items: Vec<String> = elements.iter().map(|e| format!("{}", e)).collect();
+                write!(f, "({})", items.join(", "))
+            }
         }
     }
 }
@@ -100,6 +106,57 @@ impl Value {
                 }
             }
             _ => Err(format!("Method '{}' not found on this type", method_name)),
+        }
+    }
+
+    pub fn stringify(&self, heap: &crate::heap::Heap) -> String {
+        match self {
+            Value::Nil => "nil".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(n) => n.to_string(),
+            Value::Str(s) => s.to_string(),
+            Value::Function(func) => format!("<func {}>", func.name),
+            Value::Native(_) => "<native>".to_string(),
+            Value::Tuple(elements) => {
+                let items: Vec<String> = elements.iter().map(|e| e.stringify(heap)).collect();
+                format!("({})", items.join(", "))
+            }
+            Value::ObjRef(id) => {
+                if let Ok(obj) = heap.get(*id) {
+                    match obj {
+                        crate::heap::Obj::List(list) => {
+                            let items: Vec<String> =
+                                list.iter().map(|e| e.stringify(heap)).collect();
+                            format!("[{}]", items.join(", "))
+                        }
+                        crate::heap::Obj::Map(map) => {
+                            let items: Vec<String> = map
+                                .iter()
+                                .map(|(k, v)| format!("'{}': {}", k, v.stringify(heap)))
+                                .collect();
+                            format!("{{{}}}", items.join(", "))
+                        }
+                        crate::heap::Obj::Instance { struct_id, fields } => {
+                            let mut items: Vec<String> = fields
+                                .iter()
+                                .map(|(k, v)| format!("{}: {}", k, v.stringify(heap)))
+                                .collect();
+                            items.sort();
+                            if let Ok(crate::heap::Obj::StructDef { name, .. }) =
+                                heap.get(*struct_id)
+                            {
+                                format!("{} {{{}}}", name, items.join(", "))
+                            } else {
+                                format!("Instance {{{}}}", items.join(", "))
+                            }
+                        }
+                        _ => format!("{}", self),
+                    }
+                } else {
+                    format!("{}", self)
+                }
+            }
         }
     }
 }

@@ -50,6 +50,8 @@ pub enum TokenKind {
     Impl,
     Is,
     Interface,
+    Arrow, // -> (to specify the value to be returned)
+    Wo, // woroutines (lightweight threads)
     Eof,
 }
 
@@ -162,7 +164,9 @@ impl Lexer {
                     }
                 }
                 '-' => {
-                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '>' {
+                        tokens.push(self.make_token(TokenKind::Arrow));
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
                         tokens.push(self.make_token(TokenKind::SubAssign));
                     } else {
@@ -316,8 +320,9 @@ impl Lexer {
             "import" => TokenKind::Import,
             "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl,
-            "is" =>TokenKind::Is,
+            "is" => TokenKind::Is,
             "interface" => TokenKind::Interface,
+            "wo" => TokenKind::Wo, 
             _ => TokenKind::Identifier(word),
         }
     }

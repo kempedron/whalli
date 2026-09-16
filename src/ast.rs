@@ -30,14 +30,21 @@ pub enum Expr {
     Unary(UnaryOp, Box<Expr>),
     MethodCall(Box<Expr>, String, Vec<Expr>),
     Is(Box<Expr>, Box<Expr>),
+    Tuple(Vec<Expr>),
 }
 
 #[derive(Debug)]
 pub enum Stmt {
     Let(String, Expr),
+    LetTuple(Vec<String>, Expr),
     Assign(String, Expr),
     IndexAssign(Expr, Expr, Expr),
-    Functions(String, Vec<String>, Vec<Stmt>),
+    Functions(
+        String,
+        Vec<(String, Option<String>)>,
+        Option<String>,
+        Vec<Stmt>,
+    ),
     Return(Expr),
     Expr(Expr),
     If {
@@ -62,4 +69,5 @@ pub enum Stmt {
     Impl(String, Vec<Stmt>),
     Line(usize),
     Interface(String, Vec<String>),
+    Spawn(Box<Expr>, Vec<Expr>),
 }
