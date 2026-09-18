@@ -1,5 +1,8 @@
 use crate::value::{FunctionObj, Value};
-use std::{collections::{HashMap, VecDeque}, rc::Rc};
+use std::{
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 #[derive(Debug, Clone)]
 pub enum Obj {

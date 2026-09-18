@@ -1,3 +1,4 @@
+use mio::Token;
 use std::rc::Rc;
 
 use crate::{
@@ -16,8 +17,9 @@ pub struct FunctionObj {
 
 #[derive(Debug, Clone)]
 pub enum NativeResult {
-    Return(Value),         
+    Return(Value),
     SuspendSleep(f64),
+    SuspendIO(Token),
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +30,7 @@ pub enum Value {
     Float(f64),
     Str(Rc<String>),
     Function(Rc<FunctionObj>),
-    Native(fn(Vec<Value>, &mut crate::heap::Heap) -> NativeResult),
+    Native(fn(Vec<Value>, &mut crate::vm::VM) -> NativeResult),
     ObjRef(usize),
     Tuple(Rc<Vec<Value>>),
 }
@@ -100,7 +102,7 @@ impl Value {
                         "keys" => {
                             let keys: Vec<Value> =
                                 map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect();
-                            let new_id = heap.alloc(Obj::List(keys)); // Выделяем новый список ключей в куче!
+                            let new_id = heap.alloc(Obj::List(keys));
                             Ok(Value::ObjRef(new_id))
                         }
                         _ => Err(format!("Method '{}' not found on map", method_name)),

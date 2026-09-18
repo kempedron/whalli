@@ -213,7 +213,16 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::Return) {
-            let expr = self.parse_expression()?;
+            let expr = if self.check_token(TokenKind::NewLine)
+                || self.check_token(TokenKind::Semicolon)
+                || self.check_token(TokenKind::RBrace)
+                || self.is_at_end()
+            {
+                Expr::Literal(Value::Nil)
+            } else {
+                self.parse_expression()?
+            };
+
             self.consume_stmt_end()?;
             return Ok(Stmt::Return(expr));
         }
@@ -269,14 +278,13 @@ impl Parser {
         if self.match_token(TokenKind::Wo) {
             let expr = self.parse_expression()?;
             self.consume_stmt_end()?;
-            
+
             if let Expr::Call(callee, args) = expr {
                 return Ok(Stmt::Spawn(callee, args));
             } else {
                 return Err(self.error("Expected function call after 'wo'"));
             }
         }
-
 
         let expr = self.parse_expression()?;
 
@@ -329,10 +337,10 @@ impl Parser {
     fn parse_expression(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_or()?;
         if self.match_token(TokenKind::LArrow) {
-            let value = self.parse_expression()?; 
+            let value = self.parse_expression()?;
             expr = Expr::ChanSend(Box::new(expr), Box::new(value));
         }
-    Ok(expr)
+        Ok(expr)
     }
 
     fn parse_function(&mut self) -> Result<Stmt, ParseError> {
@@ -399,9 +407,10 @@ impl Parser {
         while self.match_token(TokenKind::Plus)
             || self.match_token(TokenKind::Sub)
             || self.match_token(TokenKind::Equal)
+            || self.match_token(TokenKind::BangEqual)
             || self.match_token(TokenKind::Less)
             || self.match_token(TokenKind::Greater)
-            || self.match_token(TokenKind::LessEqual) 
+            || self.match_token(TokenKind::LessEqual)
             || self.match_token(TokenKind::GreaterEqual)
             || self.match_token(TokenKind::Is)
         {
@@ -415,6 +424,7 @@ impl Parser {
                     TokenKind::Plus => BinaryOp::Add,
                     TokenKind::Sub => BinaryOp::Sub,
                     TokenKind::Equal => BinaryOp::Equal,
+                    TokenKind::BangEqual => BinaryOp::NotEqual,
                     TokenKind::Less => BinaryOp::Less,
                     TokenKind::Greater => BinaryOp::Greater,
                     TokenKind::LessEqual => BinaryOp::LessEqual,
@@ -532,6 +542,7 @@ impl Parser {
             TokenKind::Float(n) => Expr::Literal(Value::Float(n)),
             TokenKind::True => Expr::Literal(Value::Bool(true)),
             TokenKind::False => Expr::Literal(Value::Bool(false)),
+            TokenKind::Nil => Expr::Literal(Value::Nil),
             TokenKind::Identifier(name) => Expr::Variable(name),
             _ => return Err(self.error(&format!("Expect expression, got {:?}", token))),
         };

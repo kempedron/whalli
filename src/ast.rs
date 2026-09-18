@@ -8,6 +8,7 @@ pub enum BinaryOp {
     Mul,
     Mod,
     Equal,
+    NotEqual,
     Less,
     Greater,
     LessEqual,
@@ -34,7 +35,7 @@ pub enum Expr {
     Is(Box<Expr>, Box<Expr>), // interface implementation check
     Tuple(Vec<Expr>),
     ChanSend(Box<Expr>, Box<Expr>), // ch <- val
-    ChanRecv(Box<Expr>), // <- ch
+    ChanRecv(Box<Expr>),            // <- ch
 }
 
 #[derive(Debug)]

@@ -504,7 +504,6 @@ impl Compiler {
                 self.emit(OpCode::Pop);
             }
             Stmt::Interface(name, methods) => {
-                // Создаем интерфейс в памяти и кладем в глобальную переменную (как структуру)
                 self.emit(OpCode::BuildInterface(methods.clone()));
                 self.emit(OpCode::StoreGlobal(name.clone()));
             }
@@ -560,6 +559,10 @@ impl Compiler {
                     BinaryOp::Or => self.emit(OpCode::Or),
                     BinaryOp::LessEqual => self.emit(OpCode::LessEqual),
                     BinaryOp::GreaterEqual => self.emit(OpCode::GreaterEqual),
+                    BinaryOp::NotEqual => {
+                        self.emit(OpCode::Equal);
+                        self.emit(OpCode::Not);
+                    }
                 }
             }
             Expr::Variable(name) => {

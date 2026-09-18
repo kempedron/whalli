@@ -35,10 +35,11 @@ pub enum TokenKind {
     And,
     Or,
     Not,
+    BangEqual, // !=
     Equal,
-    Less,    // <
-    Greater, // >
-    LessEqual, // <=
+    Less,         // <
+    Greater,      // >
+    LessEqual,    // <=
     GreaterEqual, // >=
     While,
     LBracket, // [
@@ -52,9 +53,10 @@ pub enum TokenKind {
     Impl,
     Is,
     Interface,
-    Arrow, // -> (to specify the value to be returned)
-    Wo, // woroutines (lightweight threads)
+    Arrow,  // -> (to specify the value to be returned)
+    Wo,     // woroutines (lightweight threads)
     LArrow, // <-
+    Nil,
     Eof,
 }
 
@@ -208,6 +210,12 @@ impl Lexer {
                         tokens.push(self.make_token(TokenKind::Assign));
                     }
                 }
+                '!' => {
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::BangEqual));
+                    }
+                }
                 '>' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         tokens.push(self.make_token(TokenKind::GreaterEqual));
@@ -226,7 +234,7 @@ impl Lexer {
                         self.pos += 2;
                     } else {
                         tokens.push(self.make_token(TokenKind::Less));
-                        self.pos += 1 
+                        self.pos += 1
                     }
                 }
                 ';' => {
@@ -337,8 +345,9 @@ impl Lexer {
             "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl,
             "is" => TokenKind::Is,
+            "nil" => TokenKind::Nil,
             "interface" => TokenKind::Interface,
-            "wo" => TokenKind::Wo, 
+            "wo" => TokenKind::Wo,
             _ => TokenKind::Identifier(word),
         }
     }
