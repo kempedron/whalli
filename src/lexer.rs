@@ -38,6 +38,8 @@ pub enum TokenKind {
     Equal,
     Less,    // <
     Greater, // >
+    LessEqual, // <=
+    GreaterEqual, // >=
     While,
     LBracket, // [
     RBracket, // ]
@@ -52,6 +54,7 @@ pub enum TokenKind {
     Interface,
     Arrow, // -> (to specify the value to be returned)
     Wo, // woroutines (lightweight threads)
+    LArrow, // <-
     Eof,
 }
 
@@ -206,12 +209,25 @@ impl Lexer {
                     }
                 }
                 '>' => {
-                    tokens.push(self.make_token(TokenKind::Greater));
-                    self.pos += 1;
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        tokens.push(self.make_token(TokenKind::GreaterEqual));
+                        self.pos += 2;
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Greater));
+                        self.pos += 1;
+                    }
                 }
                 '<' => {
-                    tokens.push(self.make_token(TokenKind::Less));
-                    self.pos += 1;
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '-' {
+                        tokens.push(self.make_token(TokenKind::LArrow));
+                        self.pos += 2;
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
+                        tokens.push(self.make_token(TokenKind::LessEqual));
+                        self.pos += 2;
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Less));
+                        self.pos += 1 
+                    }
                 }
                 ';' => {
                     tokens.push(self.make_token(TokenKind::Semicolon));

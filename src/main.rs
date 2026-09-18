@@ -17,6 +17,9 @@ use vm::VM;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        panic!("Error: expect filename. Use 'wh file_example.wh'")
+    }
     let filename = args[1].as_str();
     let source_code = fs::read_to_string(filename)?;
 

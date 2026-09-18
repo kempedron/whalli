@@ -15,6 +15,12 @@ pub struct FunctionObj {
 }
 
 #[derive(Debug, Clone)]
+pub enum NativeResult {
+    Return(Value),         
+    SuspendSleep(f64),
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -22,7 +28,7 @@ pub enum Value {
     Float(f64),
     Str(Rc<String>),
     Function(Rc<FunctionObj>),
-    Native(fn(Vec<Value>, &mut crate::heap::Heap) -> Value),
+    Native(fn(Vec<Value>, &mut crate::heap::Heap) -> NativeResult),
     ObjRef(usize),
     Tuple(Rc<Vec<Value>>),
 }

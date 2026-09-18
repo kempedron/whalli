@@ -1,5 +1,5 @@
 use crate::heap::{Heap, Obj};
-use crate::value::Value;
+use crate::value::{Value, NativeResult};
 use std::collections::HashMap;
 use std::fs;
 use std::rc::Rc;
@@ -9,30 +9,30 @@ pub fn register(heap: &mut Heap) -> Value {
 
     fs_module.insert(
         "read".to_string(),
-        Value::Native(|args, heap| {
+        Value::Native(|args, _heap| {
             if let Some(Value::Str(path)) = args.first() {
                 match fs::read_to_string(&**path) {
-                    Ok(content) => Value::Str(Rc::new(content)),
-                    Err(e) => Value::Str(Rc::new(format!("Error: {}", e))),
+                    Ok(content) => NativeResult::Return(Value::Str(Rc::new(content))),
+                    Err(e) => NativeResult::Return(Value::Str(Rc::new(format!("Error: {}", e)))),
                 }
             } else {
-                Value::Nil
+                NativeResult::Return(Value::Nil)
             }
         }),
     );
 
     fs_module.insert(
         "write".to_string(),
-        Value::Native(|args, heap| {
+        Value::Native(|args, _heap| {
             if args.len() >= 2 {
                 if let (Value::Str(path), Value::Str(content)) = (&args[0], &args[1]) {
-                    match fs::write(&**path, &**content) {
-                        Ok(_) => return Value::Bool(true),
-                        Err(_) => return Value::Bool(false),
-                    }
+                    return match fs::write(&**path, &**content) {
+                        Ok(_) => NativeResult::Return(Value::Bool(true)),
+                        Err(_) => NativeResult::Return(Value::Bool(false)),
+                    };
                 }
             }
-            Value::Bool(false)
+            NativeResult::Return(Value::Bool(false))
         }),
     );
 

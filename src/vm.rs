@@ -1,9 +1,7 @@
 use crate::{
-    heap,
-    opcode::{OpCode, UpvalueLoc},
-    value::{FunctionObj, Value},
+    heap, opcode::{OpCode, UpvalueLoc}, value::{FunctionObj, NativeResult, Value},
 };
-use std::{collections::{HashMap, VecDeque}, rc::Rc};
+use std::{collections::{HashMap, VecDeque}, rc::Rc, time::{SystemTime, Duration}};
 
 pub struct CallFrame {
     pub closure_id: usize,
@@ -18,9 +16,16 @@ pub struct RuntimeError {
     pub line: usize,
 }
 
+pub enum TaskState {
+    Runnable,
+    Sleeping(SystemTime),
+    Waiting,
+}
+
 pub struct Task {
     pub stack: Vec<Value>,
     pub frames: Vec<CallFrame>,
+    pub state: TaskState,
 }
 
 pub struct VM {
@@ -56,12 +61,13 @@ impl VM {
 
         let (mut globals, modules) = crate::stdlib::register_natives(&mut heap);
 
-        let builtins = ["int", "float", "str", "bool", "list", "map", "func"];
+        let builtins = ["int", "float", "str", "bool", "list", "map", "func", "chan"];
         let mut tasks = VecDeque::new();
 
         let main_task = Task {
             stack: Vec::new(),
             frames: vec![initial_frame],
+            state: TaskState::Runnable,
         };
         tasks.push_back(main_task);
 
@@ -114,6 +120,22 @@ impl VM {
         }
 
         while let Some(mut current_task) = self.tasks.pop_front() {
+            match current_task.state {
+                TaskState::Runnable => {}
+                TaskState::Sleeping(wake_time) => {
+                    if SystemTime::now() >= wake_time {
+                        current_task.state = TaskState::Runnable;
+                    } else {
+                        self.tasks.push_back(current_task);
+                        continue;
+                    }
+                }
+                TaskState::Waiting => {
+                    self.tasks.push_back(current_task);
+                    continue;
+                }
+            }
+
             macro_rules! pop {
             () => {
                 current_task.stack.pop().ok_or_else(|| RuntimeError {
@@ -341,8 +363,18 @@ impl VM {
                             }
                             args.reverse();
                             pop!();
-                            let result = native_fn(args, &mut self.heap);
-                            current_task.stack.push(result);
+                            
+                            match native_fn(args, &mut self.heap) {
+                                crate::value::NativeResult::Return(val) => {
+                                    current_task.stack.push(val);
+                                }
+                                crate::value::NativeResult::SuspendSleep(secs) => {
+                                    let wake_time = SystemTime::now() + Duration::from_secs_f64(secs);
+                                    current_task.state = TaskState::Sleeping(wake_time);
+                                    current_task.stack.push(Value::Nil);
+                                }
+                            }
+                        
                         }
                         _ => runtime_error!("Attempt to call a non-function value"),
                     }
@@ -417,8 +449,17 @@ impl VM {
                                             }
                                             n_args.reverse();
                                             pop!();
-                                            let res = native_fn(n_args, &mut self.heap);
-                                            current_task.stack.push(res);
+                                            
+                                            match native_fn(n_args, &mut self.heap) {
+                                                NativeResult::Return(val) => {
+                                                    current_task.stack.push(val);
+                                                }
+                                                NativeResult::SuspendSleep(secs) => {
+                                                    let wake_time = SystemTime::now() + Duration::from_secs_f64(secs);
+                                                    current_task.state = TaskState::Sleeping(wake_time);
+                                                    current_task.stack.push(Value::Nil);
+                                                }
+                                            }
                                         }
                                         Value::ObjRef(cid) => {
                                             if let Ok(heap::Obj::Closure(func, _)) =
@@ -645,6 +686,30 @@ impl VM {
                     };
                     current_task.stack.push(Value::Bool(res));
                 }
+                OpCode::LessEqual => {
+                let b = pop!();
+                let a = pop!();
+                let res = match (a, b) {
+                    (Value::Int(x), Value::Int(y)) => x <= y,
+                    (Value::Float(x), Value::Float(y)) => x <= y,
+                    (Value::Int(x), Value::Float(y)) => (x as f64) <= y,
+                    (Value::Float(x), Value::Int(y)) => x <= (y as f64),
+                    _ => runtime_error!("Invalid types for '<=' operation"),
+                };
+                current_task.stack.push(Value::Bool(res));
+            }
+            OpCode::GreaterEqual => {
+                let b = pop!();
+                let a = pop!();
+                let res = match (a, b) {
+                    (Value::Int(x), Value::Int(y)) => x >= y,
+                    (Value::Float(x), Value::Float(y)) => x >= y,
+                    (Value::Int(x), Value::Float(y)) => (x as f64) >= y,
+                    (Value::Float(x), Value::Int(y)) => x >= (y as f64),
+                    _ => runtime_error!("Invalid types for '>=' operation"),
+                };
+                current_task.stack.push(Value::Bool(res));
+            }
                 OpCode::And => {
                     let b = pop!();
                     let a = pop!();
@@ -788,29 +853,28 @@ impl VM {
                     }
                 }
                 OpCode::Spawn(arg_count) => {
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(pop!());
-                    }
-                    args.reverse();
-                    let callee = pop!();
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(pop!());
+                }
+                args.reverse();
+                let callee = pop!();
 
-                    if let Value::ObjRef(id) = callee {
+                match callee {
+                    Value::ObjRef(id) => {
                         if let Ok(heap::Obj::Closure(func, _)) = self.heap.get(id) {
                             if func.arity != arg_count {
                                 runtime_error!("Spawned function expects {} args", func.arity);
                             }
-
                             let mut new_task = Task {
                                 stack: Vec::new(),
                                 frames: Vec::new(),
+                                state: TaskState::Runnable,
                             };
-
-                            new_task.stack.push(callee.clone());
+                            new_task.stack.push(Value::ObjRef(id));
                             for arg in &args {
                                 new_task.stack.push(arg.clone());
                             }
-
                             let new_frame = CallFrame {
                                 closure_id: id,
                                 function: func.clone(),
@@ -823,13 +887,102 @@ impl VM {
                         } else {
                             runtime_error!("Can only spawn functions");
                         }
-                    } else {
+                    }
+                    Value::Native(native_fn) => {
+                        match native_fn(args, &mut self.heap) {
+                            crate::value::NativeResult::Return(_) => {
+                            }
+                            crate::value::NativeResult::SuspendSleep(secs) => {
+                                let wake_time = SystemTime::now() + Duration::from_secs_f64(secs);
+                                let new_task = Task {
+                                    stack: Vec::new(),
+                                    frames: Vec::new(), 
+                                    state: TaskState::Sleeping(wake_time),
+                                };
+                                self.tasks.push_back(new_task);
+                            }
+                        }
+                    }
+                    _ => {
                         runtime_error!("Can only spawn functions");
                     }
                 }
             }
+            OpCode::ChanRecv => {
+                let chan_val = pop!();
+                if let Value::ObjRef(id) = chan_val {
+                    let mut has_msg = false;
+                    let mut msg = Value::Nil;
+                    
+                    if let Ok(crate::heap::Obj::Channel(queue)) = self.heap.get_mut(id) {
+                        if let Some(m) = queue.pop_front() {
+                            has_msg = true;
+                            msg = m;
+                        }
+                    } else {
+                        runtime_error!("Attempt to read from a non-channel");
+                    }
+                    
+                    if has_msg {
+                        current_task.stack.push(msg);
+                        
+                        for task in self.tasks.iter_mut() {
+                            if matches!(task.state, TaskState::Waiting) {
+                                task.state = TaskState::Runnable;
+                            }
+                        }
+                    } else {
+                        current_task.stack.push(chan_val);
+                        current_task.frames[frame_idx].ip -= 1;
+                        current_task.state = TaskState::Waiting;
+                        
+                        break; 
+                    }
+                } else {
+                    runtime_error!("Attempt to read from a non-channel");
+                }
+            
+            }
 
-            // Возвращаем активную задачу обратно в очередь планировщика
+            OpCode::ChanSend => {
+                let val = pop!();
+                let chan_val = pop!();
+                
+                if let Value::ObjRef(id) = chan_val {
+                    let is_full = if let Ok(crate::heap::Obj::Channel(queue)) = self.heap.get(id) {
+                            queue.len() >= queue.capacity()
+                        } else {
+                            runtime_error!("Cannot send to a non-channel");
+                        };
+
+                    if is_full {
+                        current_task.stack.push(chan_val);
+                        current_task.stack.push(val);
+                        current_task.frames[frame_idx].ip -= 1;
+                        current_task.state = TaskState::Waiting; 
+                        
+                        break;
+                    } else {
+                        if let Ok(crate::heap::Obj::Channel(queue)) = self.heap.get_mut(id) {
+                            queue.push_back(val);
+                        }
+                        
+                        current_task.stack.push(Value::Bool(true));
+                        
+                        for task in self.tasks.iter_mut() {
+                            if matches!(task.state, TaskState::Waiting) {
+                                task.state = TaskState::Runnable;
+                            }
+                        }
+                    }
+                } else {
+                    runtime_error!("Cannot send to a non-channel");
+                }
+                
+            }
+            
+            }
+
             if !current_task.frames.is_empty() {
                 self.tasks.push_back(current_task);
             }

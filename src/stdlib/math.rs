@@ -1,5 +1,5 @@
 use crate::heap::{Heap, Obj};
-use crate::value::Value;
+use crate::value::{Value, NativeResult};
 use std::collections::HashMap;
 
 pub fn register(heap: &mut Heap) -> Value {
@@ -8,11 +8,11 @@ pub fn register(heap: &mut Heap) -> Value {
     math_module.insert("pi".to_string(), Value::Float(std::f64::consts::PI));
     math_module.insert(
         "sin".to_string(),
-        Value::Native(|args, heap| {
-            if let Value::Float(n) = args[0] {
-                Value::Float(n.sin())
+        Value::Native(|args, _heap| {
+            if let Some(Value::Float(n)) = args.first() {
+                NativeResult::Return(Value::Float(n.sin()))
             } else {
-                Value::Nil
+                NativeResult::Return(Value::Nil)
             }
         }),
     );

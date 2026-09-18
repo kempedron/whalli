@@ -558,6 +558,8 @@ impl Compiler {
                     BinaryOp::Less => self.emit(OpCode::Less),
                     BinaryOp::And => self.emit(OpCode::And),
                     BinaryOp::Or => self.emit(OpCode::Or),
+                    BinaryOp::LessEqual => self.emit(OpCode::LessEqual),
+                    BinaryOp::GreaterEqual => self.emit(OpCode::GreaterEqual),
                 }
             }
             Expr::Variable(name) => {
@@ -621,6 +623,15 @@ impl Compiler {
                     self.compile_expr(el);
                 }
                 self.emit(OpCode::BuildTuple(len));
+            }
+            Expr::ChanSend(chan, val) => {
+                self.compile_expr(chan);
+                self.compile_expr(val);
+                self.emit(OpCode::ChanSend);
+            }
+            Expr::ChanRecv(chan) => {
+                self.compile_expr(chan);
+                self.emit(OpCode::ChanRecv);
             }
         }
     }

@@ -27,6 +27,8 @@ pub enum OpCode {
     Equal,
     Less,
     Greater,
+    LessEqual,
+    GreaterEqual,
     JumpIfFalse(usize),
     Jump(usize),
     BuildList(usize),
@@ -50,4 +52,6 @@ pub enum OpCode {
     BuildTuple(usize),
     UnpackTuple(usize),
     Spawn(usize),
+    ChanSend,
+    ChanRecv,
 }

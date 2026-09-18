@@ -1,5 +1,5 @@
 use crate::value::{FunctionObj, Value};
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::{HashMap, VecDeque}, rc::Rc};
 
 #[derive(Debug, Clone)]
 pub enum Obj {
@@ -18,6 +18,7 @@ pub enum Obj {
         fields: HashMap<String, Value>,
     },
     Interface(Vec<String>),
+    Channel(VecDeque<crate::value::Value>),
 }
 
 pub struct HeapObj {
@@ -90,6 +91,13 @@ impl Heap {
                         for val in fields.values() {
                             if let Value::ObjRef(child_id) = val {
                                 worklist.push(*child_id);
+                            }
+                        }
+                    }
+                    Obj::Channel(queue) => {
+                        for val in queue {
+                            if let Value::ObjRef(ref_id) = val {
+                                worklist.push(*ref_id);
                             }
                         }
                     }

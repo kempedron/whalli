@@ -277,6 +277,7 @@ impl Parser {
             }
         }
 
+
         let expr = self.parse_expression()?;
 
         if self.match_token(TokenKind::Assign) {
@@ -326,7 +327,12 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Result<Expr, ParseError> {
-        self.parse_or()
+        let mut expr = self.parse_or()?;
+        if self.match_token(TokenKind::LArrow) {
+            let value = self.parse_expression()?; 
+            expr = Expr::ChanSend(Box::new(expr), Box::new(value));
+        }
+    Ok(expr)
     }
 
     fn parse_function(&mut self) -> Result<Stmt, ParseError> {
@@ -395,6 +401,8 @@ impl Parser {
             || self.match_token(TokenKind::Equal)
             || self.match_token(TokenKind::Less)
             || self.match_token(TokenKind::Greater)
+            || self.match_token(TokenKind::LessEqual) 
+            || self.match_token(TokenKind::GreaterEqual)
             || self.match_token(TokenKind::Is)
         {
             let op_token = self.previous_token().clone();
@@ -409,6 +417,8 @@ impl Parser {
                     TokenKind::Equal => BinaryOp::Equal,
                     TokenKind::Less => BinaryOp::Less,
                     TokenKind::Greater => BinaryOp::Greater,
+                    TokenKind::LessEqual => BinaryOp::LessEqual,
+                    TokenKind::GreaterEqual => BinaryOp::GreaterEqual,
                     _ => unreachable!(),
                 };
                 left = Expr::Binary(Box::new(left), op, Box::new(right));
@@ -441,6 +451,11 @@ impl Parser {
         if self.match_token(TokenKind::Not) {
             let expr = self.parse_primary()?;
             return Ok(Expr::Unary(UnaryOp::Not, Box::new(expr)));
+        }
+
+        if self.match_token(TokenKind::LArrow) {
+            let right = self.parse_primary()?;
+            return Ok(Expr::ChanRecv(Box::new(right)));
         }
 
         if self.match_token(TokenKind::LParen) {

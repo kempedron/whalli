@@ -1,8 +1,6 @@
 use crate::heap::{Heap, Obj};
-use crate::value::Value;
+use crate::value::{Value, NativeResult};
 use std::collections::HashMap;
-use std::thread;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn register(heap: &mut Heap) -> Value {
@@ -10,25 +8,26 @@ pub fn register(heap: &mut Heap) -> Value {
 
     time_module.insert(
         "now".to_string(),
-        Value::Native(|args, heap| {
+        Value::Native(|_args, _heap| {
             let start = SystemTime::now();
             let since_epoch = start.duration_since(UNIX_EPOCH).unwrap();
-            Value::Float(since_epoch.as_secs_f64())
+            NativeResult::Return(Value::Float(since_epoch.as_secs_f64()))
         }),
     );
 
     time_module.insert(
         "sleep".to_string(),
-        Value::Native(|args, heap| {
+        Value::Native(|args, _heap| {
             if let Some(val) = args.first() {
                 let secs = match val {
                     Value::Float(f) => *f,
                     Value::Int(i) => *i as f64,
                     _ => 0.0,
                 };
-                thread::sleep(Duration::from_secs_f64(secs));
+                // Возвращаем сигнал усыпить текущую ворутину
+                return NativeResult::SuspendSleep(secs.max(0.0));
             }
-            Value::Nil
+            NativeResult::Return(Value::Nil)
         }),
     );
 

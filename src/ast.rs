@@ -10,6 +10,8 @@ pub enum BinaryOp {
     Equal,
     Less,
     Greater,
+    LessEqual,
+    GreaterEqual,
     And,
     Or,
 }
@@ -29,8 +31,10 @@ pub enum Expr {
     Index(Box<Expr>, Box<Expr>),
     Unary(UnaryOp, Box<Expr>),
     MethodCall(Box<Expr>, String, Vec<Expr>),
-    Is(Box<Expr>, Box<Expr>),
+    Is(Box<Expr>, Box<Expr>), // interface implementation check
     Tuple(Vec<Expr>),
+    ChanSend(Box<Expr>, Box<Expr>), // ch <- val
+    ChanRecv(Box<Expr>), // <- ch
 }
 
 #[derive(Debug)]
