@@ -1088,6 +1088,76 @@ impl VM {
                                 runtime_error!("Cannot send to a non-channel");
                             }
                         }
+                        OpCode::IterNext(state_idx) => {
+                            let offset = current_task.frames[frame_idx].stack_offset;
+                            let collection_idx = offset + state_idx - 1;
+                            let counter_idx = offset + state_idx;
+                            
+                            let collection = current_task.stack[collection_idx].clone();
+                            let state_val = current_task.stack[counter_idx].clone();
+
+                            if let Value::Int(current_idx) = state_val {
+                                match collection {
+                                    Value::ObjRef(id) if matches!(self.heap.get(id), Ok(crate::heap::Obj::List(_))) => {
+                                        if let Ok(crate::heap::Obj::List(list)) = self.heap.get(id) {
+                                            if current_idx < list.len() as i64 {
+                                                current_task.stack[counter_idx] = Value::Int(current_idx + 1);
+                                                current_task.stack.push(list[current_idx as usize].clone());
+                                                current_task.stack.push(Value::Bool(true));
+                                            } else {
+                                                current_task.stack.push(Value::Nil); // Фейковый элемент
+                                                current_task.stack.push(Value::Bool(false)); // Флаг выхода
+                                            }
+                                        }
+                                    }
+                                    
+                                    Value::ObjRef(id) if matches!(self.heap.get(id), Ok(crate::heap::Obj::Map(_))) => {
+                                        if let Ok(crate::heap::Obj::Map(map)) = self.heap.get(id) {
+                                            let keys: Vec<&String> = map.keys().collect();
+                                            if current_idx < keys.len() as i64 {
+                                                current_task.stack[counter_idx] = Value::Int(current_idx + 1);
+                                                current_task.stack.push(Value::Str(std::rc::Rc::new(keys[current_idx as usize].clone())));
+                                                current_task.stack.push(Value::Bool(true));
+                                            } else {
+                                                current_task.stack.push(Value::Nil);
+                                                current_task.stack.push(Value::Bool(false));
+                                            }
+                                        }
+                                    }
+
+                                    Value::Range(start, end, step) => {
+                                        let current_val = start + (current_idx * step);
+                                        
+                                        let has_next = if step > 0 { current_val < end } else { current_val > end };
+
+                                        if has_next {
+                                            current_task.stack[counter_idx] = Value::Int(current_idx + 1);
+                                            current_task.stack.push(Value::Int(current_val));
+                                            current_task.stack.push(Value::Bool(true));
+                                        } else {
+                                            current_task.stack.push(Value::Nil);
+                                            current_task.stack.push(Value::Bool(false));
+                                        }
+                                    }
+                                    
+                                    Value::Str(s) => {
+                                        if current_idx < s.len() as i64 {
+                                            current_task.stack[counter_idx] = Value::Int(current_idx + 1);
+                                            let ch = s.chars().nth(current_idx as usize).unwrap().to_string();
+                                            current_task.stack.push(Value::Str(std::rc::Rc::new(ch)));
+                                            current_task.stack.push(Value::Bool(true));
+                                        } else {
+                                            current_task.stack.push(Value::Nil);
+                                            current_task.stack.push(Value::Bool(false));
+                                        }
+                                    }
+
+                                    _ => runtime_error!("TypeError: object is not iterable"),
+                                }
+                            } else {
+                                unreachable!("Iterator state is corrupted");
+                            }
+                        }
                     }
 
                     fuel -= 1;

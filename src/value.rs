@@ -33,6 +33,7 @@ pub enum Value {
     Native(fn(Vec<Value>, &mut crate::vm::VM) -> NativeResult),
     ObjRef(usize),
     Tuple(Rc<Vec<Value>>),
+    Range(i64, i64, i64),
 }
 
 impl PartialEq for Value {
@@ -46,6 +47,7 @@ impl PartialEq for Value {
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(a, b),
             (Value::ObjRef(a), Value::ObjRef(b)) => a == b,
             (Value::Native(a), Value::Native(b)) => (*a as usize) == (*b as usize),
+            (Value::Range(s1, e1, st1), Value::Range(s2, e2, st2)) => s1 == s2 && e1 == e2 && st1 == st2,
             _ => false,
         }
     }
@@ -66,6 +68,7 @@ impl std::fmt::Display for Value {
                 let items: Vec<String> = elements.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "({})", items.join(", "))
             }
+            Value::Range(s, e, step) => write!(f, "range({}, {}, {})", s, e, step),
         }
     }
 }
@@ -83,25 +86,75 @@ impl Value {
                 _ => Err(format!("Method '{}' not found on string", method_name)),
             },
             Value::ObjRef(id) => {
-                let obj = heap.get_mut(*id)?;
-                match obj {
-                    Obj::List(list) => match method_name {
+                
+                let obj_type = {
+                    let obj = heap.get(*id)?;
+                    match obj {
+                        Obj::List(_) => "list",
+                        Obj::Map(_) => "map",
+                        _ => "other",
+                    }
+                };
+
+                match obj_type {
+                    "list" => match method_name {
                         "push" => {
                             if args.len() != 1 {
                                 return Err("'push' expects 1 argument".to_string());
                             }
-                            list.push(args[0].clone());
-                            Ok(Value::Nil)
+                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
+                                list.push(args[0].clone());
+                                Ok(Value::Nil)
+                            } else {
+                                unreachable!()
+                            }
                         }
-                        "pop" => Ok(list.pop().unwrap_or(Value::Nil)),
-                        "len" => Ok(Value::Int(list.len() as i64)),
+                        "pop" => {
+                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
+                                Ok(list.pop().unwrap_or(Value::Nil))
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "len" => {
+                            if let Ok(Obj::List(list)) = heap.get(*id) {
+                                Ok(Value::Int(list.len() as i64))
+                            } else {
+                                unreachable!()
+                            }
+                        }
                         _ => Err(format!("Method '{}' not found on list", method_name)),
                     },
-                    Obj::Map(map) => match method_name {
-                        "len" => Ok(Value::Int(map.len() as i64)),
+                    "map" => match method_name {
+                        "len" => {
+                            if let Ok(Obj::Map(map)) = heap.get(*id) {
+                                Ok(Value::Int(map.len() as i64))
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "remove" => {
+                            if args.len() != 1 {
+                                return Err("'remove' expects 1 argument".to_string());
+                            }
+                            if let Value::Str(key) = &args[0] {
+                                if let Ok(Obj::Map(map)) = heap.get_mut(*id) {
+                                    Ok(map.remove(&**key).unwrap_or(Value::Nil))
+                                } else {
+                                    unreachable!()
+                                }
+                            } else {
+                                Err("Map key must be string".to_string())
+                            }
+                        }
                         "keys" => {
-                            let keys: Vec<Value> =
-                                map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect();
+                            let keys: Vec<Value> = {
+                                if let Ok(Obj::Map(map)) = heap.get(*id) {
+                                    map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect()
+                                } else {
+                                    unreachable!()
+                                }
+                            };
                             let new_id = heap.alloc(Obj::List(keys));
                             Ok(Value::ObjRef(new_id))
                         }
@@ -126,6 +179,7 @@ impl Value {
             Value::Str(s) => s.to_string(),
             Value::Function(func) => format!("<func {}>", func.name),
             Value::Native(_) => "<native>".to_string(),
+            Value::Range(s, e, step) => format!("range({}, {}, {})", s, e, step),
             Value::Tuple(elements) => {
                 let items: Vec<String> = elements.iter().map(|e| e.stringify(heap)).collect();
                 format!("({})", items.join(", "))

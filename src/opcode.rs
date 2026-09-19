@@ -54,4 +54,5 @@ pub enum OpCode {
     Spawn(usize),
     ChanSend,
     ChanRecv,
+    IterNext(usize),
 }

@@ -296,73 +296,58 @@ impl Compiler {
                 iterable,
                 body,
             } => {
-                let loop_id = self.current_ip();
-                let arr_var = format!("__iter_arr{}", loop_id);
-                let idx_var = format!("__iter_idx{}", loop_id);
+                self.begin_scope();
 
                 self.compile_expr(iterable);
-                self.emit(OpCode::StoreGlobal(arr_var.clone()));
+                
+                let current_depth = self.current_state().scope_depth;
+                
+                self.current_state().locals.push(Local { 
+                    name: "<iterable>".to_string(), 
+                    depth: current_depth 
+                });
 
                 self.emit(OpCode::Push(Value::Int(0)));
-                self.emit(OpCode::StoreGlobal(idx_var.clone()));
+                
+                let iter_state_idx = self.current_state().locals.len();
+                self.current_state().locals.push(Local { 
+                    name: "<iter_state>".to_string(), 
+                    depth: current_depth 
+                });
 
                 let loop_start = self.current_ip();
 
-                self.emit(OpCode::LoadGlobal(idx_var.clone()));
-                self.emit(OpCode::LoadGlobal(arr_var.clone()));
-                self.emit(OpCode::ListLen);
-                self.emit(OpCode::Less);
-
+                self.emit(OpCode::IterNext(iter_state_idx));
+                
                 let exit_pos = self.emit_jump(OpCode::JumpIfFalse(999));
 
-                self.emit(OpCode::LoadGlobal(arr_var.clone()));
-                self.emit(OpCode::LoadGlobal(idx_var.clone()));
-                self.emit(OpCode::IndexGet);
-                self.emit(OpCode::StoreGlobal(item.clone()));
+                self.begin_scope();
+                
+                let inner_depth = self.current_state().scope_depth;
+                self.current_state().locals.push(Local { name: item.clone(), depth: inner_depth });
 
                 let local_count = self.current_state().locals.len();
-                self.current_state().loops.push(LoopState {
-                    break_jumps: vec![],
-                    continue_jumps: vec![],
-                    local_count,
-                });
-
-                self.begin_scope();
-
-                self.emit(OpCode::LoadGlobal(arr_var.clone()));
-                self.emit(OpCode::LoadGlobal(idx_var.clone()));
-                self.emit(OpCode::IndexGet);
-
-                let depth = self.current_state().scope_depth;
-                self.current_state().locals.push(Local {
-                    name: item.clone(),
-                    depth,
-                });
+                self.current_state().loops.push(LoopState { break_jumps: vec![], continue_jumps: vec![], local_count });
 
                 for s in body {
                     self.compile_stmt(s);
                 }
+
                 self.end_scope();
 
-                let continue_target = self.current_ip();
-
-                self.emit(OpCode::LoadGlobal(idx_var.clone()));
-                self.emit(OpCode::Push(Value::Int(1)));
-                self.emit(OpCode::Add);
-                self.emit(OpCode::StoreGlobal(idx_var.clone()));
-
-                self.emit(OpCode::Jump(loop_start));
+                let continue_target = loop_start;
+                self.emit(OpCode::Jump(loop_start)); 
 
                 let end_pos = self.current_ip();
                 self.patch_jump(exit_pos, end_pos);
+                
+                self.emit(OpCode::Pop);
 
                 let loop_state = self.current_state().loops.pop().unwrap();
-                for pos in loop_state.break_jumps {
-                    self.patch_jump(pos, end_pos);
-                }
-                for pos in loop_state.continue_jumps {
-                    self.patch_jump(pos, continue_target);
-                }
+                for pos in loop_state.break_jumps { self.patch_jump(pos, end_pos); }
+                for pos in loop_state.continue_jumps { self.patch_jump(pos, continue_target); }
+
+                self.end_scope();
             }
             Stmt::Assign(name, expr) => {
                 self.compile_expr(expr);
