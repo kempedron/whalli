@@ -6,7 +6,6 @@ const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 let client;
 
 function findServerPath(context) {
-    // 1. Check user custom path from VS Code Settings
     const config = vscode.workspace.getConfiguration('whalli');
     const customPath = config.get('lsp.serverPath');
     if (customPath && customPath.trim() !== '') {
@@ -18,13 +17,11 @@ function findServerPath(context) {
 
     const binaryName = process.platform === 'win32' ? 'whalli-lsp.exe' : 'whalli-lsp';
 
-    // 2. Check bundled binary inside extension (e.g. <extension>/bin/whalli-lsp)
     const bundledPath = path.join(context.extensionPath, 'bin', binaryName);
     if (fs.existsSync(bundledPath)) {
         return bundledPath;
     }
 
-    // 3. Check workspace target directory (when developing Whalli itself or in a Whalli project)
     if (vscode.workspace.workspaceFolders) {
         for (const folder of vscode.workspace.workspaceFolders) {
             const relTarget = path.join(folder.uri.fsPath, 'target', 'release', binaryName);
@@ -38,7 +35,6 @@ function findServerPath(context) {
         }
     }
 
-    // 4. Check system PATH
     const pathEnv = process.env.PATH || '';
     const pathDirs = pathEnv.split(path.delimiter);
     for (const dir of pathDirs) {
@@ -48,7 +44,6 @@ function findServerPath(context) {
         }
     }
 
-    // 5. Default fallback to command name (will be resolved by PATH on spawn)
     return binaryName;
 }
 
