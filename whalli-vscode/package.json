@@ -1,23 +1,63 @@
 {
   "name": "whalli-lang",
   "displayName": "Whalli Language Support",
+  "description": "Rich language support for the Whalli programming language, including LSP, diagnostics, autocomplete, hover docs, and formatting.",
   "version": "0.1.0",
   "publisher": "kepr",
-  "engines": { "vscode": "^1.91.0" },
-  "activationEvents": ["onLanguage:whalli", "*"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kempedron/whalli.git"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Snippets"
+  ],
+  "keywords": [
+    "whalli",
+    "lsp",
+    "language-server"
+  ],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:whalli"
+  ],
   "main": "./extension.js",
   "contributes": {
-    "languages": [{
-      "id": "whalli",
-      "aliases": ["Whalli", "whalli"],
-      "extensions": [".wh"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "whalli",
-      "scopeName": "source.whalli",
-      "path": "./syntaxes/whalli.tmLanguage.json"
-    }]
+    "languages": [
+      {
+        "id": "whalli",
+        "aliases": [
+          "Whalli",
+          "whalli"
+        ],
+        "extensions": [
+          ".wh"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "whalli",
+        "scopeName": "source.whalli",
+        "path": "./syntaxes/whalli.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Whalli",
+      "properties": {
+        "whalli.lsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the whalli-lsp executable binary. If empty, the extension looks for whalli-lsp in workspace target/release or in system PATH."
+        }
+      }
+    }
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.1"
