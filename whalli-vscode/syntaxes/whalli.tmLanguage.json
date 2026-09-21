@@ -1,0 +1,66 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Whalli",
+  "scopeName": "source.whalli",
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.whalli",
+      "match": "//.*$"
+    },
+    {
+      "name": "string.quoted.double.whalli",
+      "begin": "f?\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.whalli",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "constant.numeric.whalli",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    },
+    {
+      "name": "keyword.control.whalli",
+      "match": "\\b(if|else|while|for|in|break|continue|return|wo)\\b"
+    },
+    {
+      "name": "keyword.declaration.whalli",
+      "match": "\\b(let|func|struct|impl|interface|import)\\b"
+    },
+    {
+      "name": "keyword.operator.logical.whalli",
+      "match": "\\b(and|or|not|is)\\b"
+    },
+    {
+      "name": "constant.language.whalli",
+      "match": "\\b(true|false|nil)\\b"
+    },
+    {
+      "name": "entity.name.type.whalli",
+      "match": "\\b(int|float|str|bool|list|map|chan|tuple)\\b"
+    },
+    {
+      "name": "support.class.whalli",
+      "match": "\\b(net|fs|time|math)\\b"
+    },
+    {
+      "name": "support.function.builtin.whalli",
+      "match": "\\b(println|print|range|new|len)\\b"
+    },
+    {
+      "name": "entity.name.function.whalli",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
+    },
+    {
+      "name": "keyword.operator.arrow.whalli",
+      "match": "(->|<-)"
+    },
+    {
+      "name": "keyword.operator.whalli",
+      "match": "(\\+|-|\\*|/|%|==|!=|<=|>=|<|>|=)"
+    }
+  ]
+}

@@ -171,6 +171,7 @@ impl Lexer {
                 }
                 '-' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '>' {
+                        self.pos += 2;
                         tokens.push(self.make_token(TokenKind::Arrow));
                     } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
@@ -215,6 +216,9 @@ impl Lexer {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
                         tokens.push(self.make_token(TokenKind::BangEqual));
+                    } else {
+                        self.pos += 1;
+                        tokens.push(self.make_token(TokenKind::Error("Unexpected char '!'".to_string())));
                     }
                 }
                 '>' => {
