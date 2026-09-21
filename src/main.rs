@@ -1,19 +1,9 @@
-mod ast;
-mod compiler;
-mod heap;
-mod lexer;
-mod opcode;
-mod parser;
-pub mod stdlib;
-mod value;
-mod vm;
-
-use compiler::Compiler;
-use lexer::Lexer;
-use parser::Parser;
-use std::env;
+use whalli::compiler::Compiler;
+use whalli::lexer::Lexer;
+use whalli::parser::Parser;
+use whalli::vm::VM;
 use std::fs;
-use vm::VM;
+use std::env;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();

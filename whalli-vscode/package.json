@@ -1,0 +1,14 @@
+{
+  "name": "whalli-lang",
+  "displayName": "Whalli Language Support",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.75.0" },
+  "activationEvents": ["onLanguage:whalli"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [{ "id": "whalli", "extensions": [".wh"] }]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  }
+}

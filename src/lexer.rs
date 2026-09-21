@@ -57,6 +57,7 @@ pub enum TokenKind {
     Wo,     // woroutines (lightweight threads)
     LArrow, // <-
     Nil,
+    Error(String),
     Eof,
 }
 
@@ -313,10 +314,8 @@ impl Lexer {
                     tokens.push(self.make_token(kind));
                 }
                 other => {
-                    return Err(LexError {
-                        message: format!("Undefined character '{}'", other),
-                        line: self.line,
-                    });
+                    self.pos += 1;
+                    tokens.push(self.make_token(TokenKind::Error(format!("Unknown char: {}", other))));
                 }
             }
         }
