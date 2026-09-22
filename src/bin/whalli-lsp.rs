@@ -158,35 +158,69 @@ impl Backend {
                 // Check imports and static analysis
                 let index = index_document(text);
 
-                // 1. Module import check
+                // 1. Module and file import check
                 let mut i = 0;
                 while i < tokens.len() {
                     if tokens[i].kind == TokenKind::Import && i + 1 < tokens.len() {
-                        if let TokenKind::Identifier(ref mod_name) = tokens[i + 1].kind {
-                            if !["net", "fs", "time", "math"].contains(&mod_name.as_str()) {
-                                let line_idx = tokens[i].line.saturating_sub(1);
-                                let line_str = lines.get(line_idx).unwrap_or(&"");
-                                let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
-                                diagnostics.push(Diagnostic {
-                                    range: Range {
-                                        start: Position {
-                                            line: line_idx as u32,
-                                            character: start_col as u32,
+                        match &tokens[i + 1].kind {
+                            TokenKind::Identifier(mod_name) => {
+                                if !["net", "fs", "time", "math", "json", "os"].contains(&mod_name.as_str()) {
+                                    let line_idx = tokens[i].line.saturating_sub(1);
+                                    let line_str = lines.get(line_idx).unwrap_or(&"");
+                                    let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
+                                    diagnostics.push(Diagnostic {
+                                        range: Range {
+                                            start: Position {
+                                                line: line_idx as u32,
+                                                character: start_col as u32,
+                                            },
+                                            end: Position {
+                                                line: line_idx as u32,
+                                                character: (start_col + mod_name.len()) as u32,
+                                            },
                                         },
-                                        end: Position {
-                                            line: line_idx as u32,
-                                            character: (start_col + mod_name.len()) as u32,
-                                        },
-                                    },
-                                    severity: Some(DiagnosticSeverity::WARNING),
-                                    source: Some("whalli".to_string()),
-                                    message: format!(
-                                        "Unknown module '{}'. Built-in modules are: net, fs, time, math",
-                                        mod_name
-                                    ),
-                                    ..Default::default()
-                                });
+                                        severity: Some(DiagnosticSeverity::WARNING),
+                                        source: Some("whalli".to_string()),
+                                        message: format!(
+                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os (or use import \"./path.wh\")",
+                                            mod_name
+                                        ),
+                                        ..Default::default()
+                                    });
+                                }
                             }
+                            TokenKind::Str(file_path) => {
+                                let doc_dir = uri.to_file_path().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                                let exists = if let Some(dir) = doc_dir {
+                                    dir.join(file_path).exists()
+                                } else {
+                                    std::path::Path::new(file_path).exists()
+                                };
+
+                                if !exists {
+                                    let line_idx = tokens[i].line.saturating_sub(1);
+                                    let line_str = lines.get(line_idx).unwrap_or(&"");
+                                    let search_str = format!("\"{}\"", file_path);
+                                    let start_col = line_str.find(&search_str).unwrap_or(0);
+                                    diagnostics.push(Diagnostic {
+                                        range: Range {
+                                            start: Position {
+                                                line: line_idx as u32,
+                                                character: start_col as u32,
+                                            },
+                                            end: Position {
+                                                line: line_idx as u32,
+                                                character: (start_col + search_str.len()) as u32,
+                                            },
+                                        },
+                                        severity: Some(DiagnosticSeverity::ERROR),
+                                        source: Some("whalli".to_string()),
+                                        message: format!("Cannot find imported file '{}'", file_path),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     i += 1;
@@ -589,7 +623,7 @@ impl LanguageServer for Backend {
 
         // Do not allow renaming builtins or keywords
         let reserved = [
-            "net", "fs", "time", "math", "println", "print", "range", "new", "len",
+            "net", "fs", "time", "math", "json", "os", "println", "print", "range", "new", "len",
             "push", "pop", "keys", "remove", "int", "float", "str", "bool", "let",
             "func", "return", "if", "else", "while", "for", "in", "break", "continue",
             "import", "struct", "impl", "is", "interface", "wo", "true", "false", "nil",
@@ -760,6 +794,17 @@ impl LanguageServer for Backend {
                     });
                     items.push(create_snippet("sin", "func math.sin(rad: float) -> float\nSine function (radians)", "sin(${1:rad})"));
                 }
+                "json" => {
+                    items.push(create_snippet("encode", "func json.encode(data: any) -> str\nSerializes value to JSON string", "encode(${1:data})"));
+                    items.push(create_snippet("decode", "func json.decode(json_str: str) -> any\nParses JSON string to Whalli objects", "decode(${1:json_str})"));
+                }
+                "os" => {
+                    items.push(create_snippet("args", "func os.args() -> list\nReturns command line arguments", "args()"));
+                    items.push(create_snippet("env", "func os.env(key: str) -> str\nReads environment variable", "env(${1:\"KEY\"})"));
+                    items.push(create_snippet("set_env", "func os.set_env(key: str, val: str) -> bool\nSets environment variable", "set_env(${1:\"KEY\"}, ${2:\"VALUE\"})"));
+                    items.push(create_snippet("cwd", "func os.cwd() -> str\nReturns current working directory", "cwd()"));
+                    items.push(create_snippet("exit", "func os.exit(code: int)\nExits process immediately", "exit(${1:0})"));
+                }
                 _ => {
                     // Check if caller matches a known struct with methods
                     for imp in &index.impls {
@@ -785,12 +830,24 @@ impl LanguageServer for Backend {
                         }
                     }
 
-                    // Builtin methods on collections/strings
-                    items.push(create_snippet("push", "method push(item: any)\nAppends item to list", "push(${1:item})"));
-                    items.push(create_snippet("pop", "method pop() -> any\nRemoves and returns last item of list", "pop()"));
-                    items.push(create_snippet("len", "method len() -> int\nReturns length of collection or string", "len()"));
-                    items.push(create_snippet("keys", "method keys() -> list\nReturns list of map keys", "keys()"));
-                    items.push(create_snippet("remove", "method remove(key: str) -> any\nRemoves key from map", "remove(${1:key})"));
+                    // Builtin methods on collections/strings/tuples
+                    items.push(create_snippet("sort", "method collection.sort()\nSorts elements in ascending order", "sort()"));
+                    items.push(create_snippet("push", "method list.push(item: any)\nAppends item to list", "push(${1:item})"));
+                    items.push(create_snippet("pop", "method list.pop() -> any\nRemoves and returns last item of list", "pop()"));
+                    items.push(create_snippet("len", "method collection.len() -> int\nReturns length of collection or string", "len()"));
+                    items.push(create_snippet("keys", "method map.keys() -> list\nReturns list of map keys", "keys()"));
+                    items.push(create_snippet("remove", "method map.remove(key: str) -> any\nRemoves key from map", "remove(${1:key})"));
+                    items.push(create_snippet("join", "method list.join(separator: str) -> str\nJoins list elements into string", "join(${1:\"sep\"})"));
+                    items.push(create_snippet("contains", "method collection.contains(item: any) -> bool\nChecks if item or substring exists", "contains(${1:item})"));
+                    items.push(create_snippet("reverse", "method list.reverse()\nReverses elements in-place", "reverse()"));
+                    items.push(create_snippet("clear", "method list.clear()\nRemoves all elements from list", "clear()"));
+                    items.push(create_snippet("split", "method str.split(delimiter: str) -> list\nSplits string into substrings", "split(${1:\"delimiter\"})"));
+                    items.push(create_snippet("trim", "method str.trim() -> str\nRemoves leading and trailing whitespace", "trim()"));
+                    items.push(create_snippet("replace", "method str.replace(from: str, to: str) -> str\nReplaces substring matches", "replace(${1:\"from\"}, ${2:\"to\"})"));
+                    items.push(create_snippet("to_lower", "method str.to_lower() -> str\nConverts string to lowercase", "to_lower()"));
+                    items.push(create_snippet("to_upper", "method str.to_upper() -> str\nConverts string to uppercase", "to_upper()"));
+                    items.push(create_snippet("starts_with", "method str.starts_with(prefix: str) -> bool\nChecks string prefix", "starts_with(${1:\"prefix\"})"));
+                    items.push(create_snippet("ends_with", "method str.ends_with(suffix: str) -> bool\nChecks string suffix", "ends_with(${1:\"suffix\"})"));
                 }
             }
         } else {
@@ -814,6 +871,8 @@ impl LanguageServer for Backend {
             items.push(create_snippet("if", "If condition", "if ${1:condition} {\n\t${0}\n}"));
             items.push(create_snippet("ifelse", "If-Else condition", "if ${1:condition} {\n\t${2}\n} else {\n\t${0}\n}"));
             items.push(create_snippet("wo", "Spawn async woroutine", "wo ${1:func_name}(${2})"));
+            items.push(create_snippet("import file", "Import local .wh file", "import \"./${1:file}.wh\""));
+            items.push(create_snippet("import std", "Import standard library module", "import ${1|net,fs,time,math,json,os|}"));
 
             // Keywords
             for kw in [
@@ -839,7 +898,7 @@ impl LanguageServer for Backend {
             }
 
             // Modules
-            for m in ["net", "fs", "time", "math"] {
+            for m in ["net", "fs", "time", "math", "json", "os"] {
                 items.push(CompletionItem {
                     label: m.to_string(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -1276,6 +1335,28 @@ pub fn index_document(text: &str) -> DocumentIndex {
                 }
             }
 
+            TokenKind::Import => {
+                if i + 1 < tokens.len() {
+                    if let TokenKind::Str(ref path_str) = tokens[i + 1].kind {
+                        let path = std::path::Path::new(path_str);
+                        let resolved = if path.is_relative() {
+                            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join(path)
+                        } else {
+                            path.to_path_buf()
+                        };
+
+                        if let Ok(imported_text) = std::fs::read_to_string(&resolved) {
+                            let imported_index = index_document(&imported_text);
+                            index.functions.extend(imported_index.functions);
+                            index.structs.extend(imported_index.structs);
+                            index.impls.extend(imported_index.impls);
+                            index.interfaces.extend(imported_index.interfaces);
+                            index.variables.extend(imported_index.variables);
+                        }
+                    }
+                }
+            }
+
             _ => {}
         }
         i += 1;
@@ -1474,6 +1555,63 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             ("math", "sin") => {
                 "```whalli\nfunc math.sin(rad: float) -> float\n```\nComputes the trigonometric sine of an angle given in radians.\n\n---\n\n### Examples\n```whalli\nimport math\n\nlet y = math.sin(math.pi / 2.0) // 1.0\n```\n\n#### Parameters\n- `rad`: Angle in radians (`float`).\n\n#### Returns\n`float`: The sine of the angle in range `[-1.0, 1.0]`."
             }
+            ("json", "encode") => {
+                "```whalli\nfunc json.encode(data: any) -> str\n```\nSerializes any Whalli data structure (primitives, lists, maps, tuples, structs) into a valid JSON string.\n\n---\n\n### Examples\n```whalli\nimport json\n\nlet user = new(\"map\")\nuser[\"name\"] = \"Alice\"\nuser[\"age\"] = 30\n\nlet s = json.encode(user)\nprintln(s) // {\"age\":30,\"name\":\"Alice\"}\n```\n\n#### Parameters\n- `data`: Any Whalli value.\n\n#### Returns\n`str`: Formatted JSON string."
+            }
+            ("json", "decode") => {
+                "```whalli\nfunc json.decode(json_str: str) -> any\n```\nParses a JSON string into native Whalli data structures (`map`, `list`, `int`, `float`, `bool`, `nil`). Returns `nil` on malformed syntax.\n\n---\n\n### Examples\n```whalli\nimport json\n\nlet data = json.decode(\"{\\\"name\\\": \\\"Bob\\\", \\\"score\\\": 95}\")\nprintln(\"Name:\", data[\"name\"])\n```\n\n#### Parameters\n- `json_str`: The JSON string to parse.\n\n#### Returns\n`any`: The parsed Whalli value, or `nil` on error."
+            }
+            ("os", "args") => {
+                "```whalli\nfunc os.args() -> list\n```\nReturns the command line arguments passed to the current program as a `list` of strings.\n\n---\n\n### Examples\n```whalli\nimport os\n\nlet args = os.args()\nfor a in args {\n    println(\"Arg:\", a)\n}\n```\n\n#### Returns\n`list`: List of CLI argument strings."
+            }
+            ("os", "env") => {
+                "```whalli\nfunc os.env(key: str) -> str\n```\nRetrieves the value of an environment variable, or returns `nil` if not set.\n\n---\n\n### Examples\n```whalli\nimport os\n\nlet home = os.env(\"HOME\")\nprintln(\"Home dir:\", home)\n```\n\n#### Parameters\n- `key`: Name of the environment variable.\n\n#### Returns\n`str`: Environment variable value, or `nil`."
+            }
+            ("os", "set_env") => {
+                "```whalli\nfunc os.set_env(key: str, val: str) -> bool\n```\nSets the value of an environment variable for the current process.\n\n---\n\n### Examples\n```whalli\nimport os\n\nos.set_env(\"WHALLI_MODE\", \"production\")\n```\n\n#### Parameters\n- `key`: Name of the environment variable.\n- `val`: Value to set.\n\n#### Returns\n`bool`: `true` on success."
+            }
+            ("os", "cwd") => {
+                "```whalli\nfunc os.cwd() -> str\n```\nReturns the current working directory path as a string.\n\n---\n\n### Examples\n```whalli\nimport os\n\nlet dir = os.cwd()\nprintln(\"Working in:\", dir)\n```\n\n#### Returns\n`str`: Current working directory path."
+            }
+            ("os", "exit") => {
+                "```whalli\nfunc os.exit(code: int)\n```\nTerminates the current process immediately with the specified integer exit code.\n\n---\n\n### Examples\n```whalli\nimport os\n\nos.exit(0) // exit successfully\n```\n\n#### Parameters\n- `code`: Integer exit status (0 for success)."
+            }
+            (_, "sort") => {
+                "```whalli\nmethod collection.sort()\n```\nSorts elements in ascending order.\n- For `list`: sorts elements **in-place** and returns `nil`.\n- For `tuple`: returns a **new sorted tuple**.\n\n---\n\n### Examples\n```whalli\nlet arr = new(\"list\")\narr.push(5)\narr.push(2)\narr.push(8)\narr.sort()\nprintln(arr) // [2, 5, 8]\n```"
+            }
+            (_, "join") => {
+                "```whalli\nmethod list.join(separator: str) -> str\n```\nConcatenates all elements of a list into a single string using `separator`.\n\n---\n\n### Examples\n```whalli\nlet arr = new(\"list\")\narr.push(\"apple\")\narr.push(\"banana\")\nlet s = arr.join(\", \") // \"apple, banana\"\n```"
+            }
+            (_, "reverse") => {
+                "```whalli\nmethod list.reverse()\n```\nReverses the order of elements in the list in-place.\n\n---\n\n### Examples\n```whalli\nlet arr = new(\"list\")\narr.push(1)\narr.push(2)\narr.reverse() // [2, 1]\n```"
+            }
+            (_, "clear") => {
+                "```whalli\nmethod list.clear()\n```\nRemoves all elements from the list in-place."
+            }
+            (_, "contains") => {
+                "```whalli\nmethod collection.contains(item: any) -> bool\n```\nChecks whether the list contains `item` or whether the string contains the substring.\n\n---\n\n### Examples\n```whalli\nlet s = \"Hello World\"\nprintln(s.contains(\"World\")) // true\n```"
+            }
+            (_, "split") => {
+                "```whalli\nmethod str.split(delimiter: str) -> list\n```\nSplits the string into a `list` of substrings separated by `delimiter`.\n\n---\n\n### Examples\n```whalli\nlet text = \"a,b,c\"\nlet parts = text.split(\",\") // [\"a\", \"b\", \"c\"]\n```"
+            }
+            (_, "trim") => {
+                "```whalli\nmethod str.trim() -> str\n```\nReturns a copy of the string with leading and trailing whitespace removed.\n\n---\n\n### Examples\n```whalli\nlet s = \"  hello  \".trim() // \"hello\"\n```"
+            }
+            (_, "replace") => {
+                "```whalli\nmethod str.replace(from: str, to: str) -> str\n```\nReplaces all matches of `from` substring with `to` substring.\n\n---\n\n### Examples\n```whalli\nlet s = \"hello world\".replace(\"world\", \"Whalli\")\n```"
+            }
+            (_, "to_lower") => {
+                "```whalli\nmethod str.to_lower() -> str\n```\nConverts all characters of the string to lowercase."
+            }
+            (_, "to_upper") => {
+                "```whalli\nmethod str.to_upper() -> str\n```\nConverts all characters of the string to uppercase."
+            }
+            (_, "starts_with") => {
+                "```whalli\nmethod str.starts_with(prefix: str) -> bool\n```\nReturns `true` if string starts with the given prefix."
+            }
+            (_, "ends_with") => {
+                "```whalli\nmethod str.ends_with(suffix: str) -> bool\n```\nReturns `true` if string ends with the given suffix."
+            }
             (_, "push") => {
                 "```whalli\nmethod list.push(item: any)\n```\nAppends an element to the end of a `list`.\n\n---\n\n### Examples\n```whalli\nlet arr = new(\"list\")\narr.push(10)\narr.push(20)\nprintln(arr) // [10, 20]\n```\n\n#### Parameters\n- `item`: The element to insert."
             }
@@ -1522,6 +1660,12 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             }
             "math" => {
                 "### Module `math`\nMathematical functions and constants.\n\n---\n\n### Examples\n```whalli\nimport math\n\nlet y = math.sin(math.pi / 2.0)\nprintln(y) // 1.0\n```\n\n#### Members:\n- `pi: float`: Constant $\\pi$\n- `sin(rad: float) -> float`: Sine function".to_string()
+            }
+            "json" => {
+                "### Module `json`\nJSON serialization and deserialization utilities.\n\n---\n\n### Examples\n```whalli\nimport json\n\nlet text = json.encode(new(\"list\"))\nlet data = json.decode(text)\n```\n\n#### Members:\n- `encode(val: any) -> str`: Serializes value to JSON string\n- `decode(json_str: str) -> any`: Parses JSON string to native objects".to_string()
+            }
+            "os" => {
+                "### Module `os`\nOperating system environment and process interaction.\n\n---\n\n### Examples\n```whalli\nimport os\n\nlet args = os.args()\nlet dir = os.cwd()\nprintln(\"Current dir:\", dir)\n```\n\n#### Members:\n- `args() -> list`: Command line arguments\n- `env(key: str) -> str | nil`: Reads environment variable\n- `set_env(key: str, val: str) -> bool`: Sets environment variable\n- `cwd() -> str`: Working directory\n- `exit(code: int)`: Exits process".to_string()
             }
             "println" => {
                 "```whalli\nfunc println(...args: any)\n```\nPrints string representations of arguments separated by space to standard output followed by a newline.\n\n---\n\n### Examples\n```whalli\nprintln(\"Hello, world!\")\nprintln(\"Count:\", 42, true)\n```".to_string()
@@ -1584,7 +1728,7 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "return" => "### Keyword `return`\nExits the current function and passes back the specified result value.\n\n---\n\n### Examples\n```whalli\nfunc square(n: int) -> int {\n    return n * n\n}\n```".to_string(),
             "break" => "### Keyword `break`\nImmediately terminates the innermost `for` or `while` loop.".to_string(),
             "continue" => "### Keyword `continue`\nSkips the remainder of current iteration and proceeds to next loop cycle.".to_string(),
-            "import" => "### Keyword `import`\nImports standard library modules (`net`, `fs`, `time`, `math`).\n\n---\n\n### Examples\n```whalli\nimport net\nimport time\n```".to_string(),
+            "import" => "### Keyword `import`\nImports standard library modules (`net`, `fs`, `time`, `math`, `json`, `os`).\n\n---\n\n### Examples\n```whalli\nimport net\nimport json\nimport os\n```".to_string(),
             "true" => "Boolean literal representing truth (`true`).".to_string(),
             "false" => "Boolean literal representing falsehood (`false`).".to_string(),
             "nil" => "Literal representing absence of value (`nil`).".to_string(),
@@ -2185,10 +2329,31 @@ fn get_known_signature(name: &str, index: &DocumentIndex) -> Option<SignatureInf
 
         "math.sin" => ("math.sin(rad: float) -> float", vec!["rad: float"], "Trigonometric sine function"),
 
+        "json.encode" => ("json.encode(data: any) -> str", vec!["data: any"], "Serializes Whalli value into formatted JSON string"),
+        "json.decode" => ("json.decode(json_str: str) -> any", vec!["json_str: str"], "Parses JSON string into native Whalli data structures"),
+
+        "os.args" => ("os.args() -> list", vec![], "Returns command line arguments passed to current process"),
+        "os.env" => ("os.env(key: str) -> str", vec!["key: str"], "Reads environment variable value"),
+        "os.set_env" => ("os.set_env(key: str, val: str) -> bool", vec!["key: str", "val: str"], "Sets environment variable"),
+        "os.cwd" => ("os.cwd() -> str", vec![], "Returns current working directory path"),
+        "os.exit" => ("os.exit(code: int)", vec!["code: int"], "Exits process immediately with exit code"),
+
         "push" => ("push(item: any)", vec!["item: any"], "Appends an element to a list"),
         "pop" => ("pop() -> any", vec![], "Removes and returns last element of a list"),
         "keys" => ("keys() -> list", vec![], "Returns all dictionary keys as a list"),
         "remove" => ("remove(key: str) -> any", vec!["key: str"], "Removes key and returns its value"),
+        "sort" => ("sort()", vec![], "Sorts elements in ascending order"),
+        "join" => ("join(separator: str) -> str", vec!["separator: str"], "Joins list elements into string"),
+        "contains" => ("contains(item: any) -> bool", vec!["item: any"], "Checks if item or substring exists"),
+        "reverse" => ("reverse()", vec![], "Reverses elements in-place"),
+        "clear" => ("clear()", vec![], "Clears all elements"),
+        "split" => ("split(delimiter: str) -> list", vec!["delimiter: str"], "Splits string into list of substrings"),
+        "trim" => ("trim() -> str", vec![], "Removes leading and trailing whitespace"),
+        "replace" => ("replace(from: str, to: str) -> str", vec!["from: str", "to: str"], "Replaces substring matches"),
+        "to_lower" => ("to_lower() -> str", vec![], "Converts string to lowercase"),
+        "to_upper" => ("to_upper() -> str", vec![], "Converts string to uppercase"),
+        "starts_with" => ("starts_with(prefix: str) -> bool", vec!["prefix: str"], "Checks string prefix"),
+        "ends_with" => ("ends_with(suffix: str) -> bool", vec!["suffix: str"], "Checks string suffix"),
 
         _ => {
             if let Some(f) = index.functions.iter().find(|f| f.name == name) {
@@ -2421,7 +2586,7 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
 
                     "int" | "float" | "str" | "bool" | "list" | "map" | "chan" | "tuple" => (1, 0), // TYPE
 
-                    "net" | "fs" | "time" | "math" => (3, 2), // VARIABLE + DEFAULT_LIBRARY
+                    "net" | "fs" | "time" | "math" | "json" | "os" => (3, 2), // VARIABLE + DEFAULT_LIBRARY
 
                     "println" | "print" | "range" | "new" | "len" => (2, 2), // FUNCTION + DEFAULT_LIBRARY
 
@@ -2771,5 +2936,39 @@ let flag = true
             InlayHintLabel::String(s) => s == ": bool",
             _ => false,
         });
+    }
+
+    #[test]
+    fn test_file_import_indexing() {
+        let code = r#"
+import "./math_utils.wh"
+
+let res = add(1, 2)
+"#;
+        let index = index_document(code);
+        // Should have indexed functions from math_utils.wh
+        assert!(index.functions.iter().any(|f| f.name == "add"));
+        assert!(index.functions.iter().any(|f| f.name == "multiply"));
+    }
+
+    #[test]
+    fn test_lsp_json_os_hover() {
+        let code = "json.encode(data)\nos.cwd()";
+        let index = index_document(code);
+        let hover_json = get_hover_info(code, Position { line: 0, character: 6 }, &index);
+        assert!(hover_json.is_some());
+        if let Some(h) = hover_json {
+            if let HoverContents::Markup(m) = h.contents {
+                assert!(m.value.contains("json.encode"));
+            }
+        }
+
+        let hover_os = get_hover_info(code, Position { line: 1, character: 4 }, &index);
+        assert!(hover_os.is_some());
+        if let Some(h) = hover_os {
+            if let HoverContents::Markup(m) = h.contents {
+                assert!(m.value.contains("os.cwd"));
+            }
+        }
     }
 }

@@ -69,7 +69,8 @@ pub enum Stmt {
     Break,
     Continue,
     Block(Vec<Stmt>),
-    Import(String),
+    Import(String),        // import net  — stdlib module
+    ImportFile(String),    // import "./path.wh"  — local file
     Struct(String, Vec<(String, String)>),
     Impl(String, Vec<Stmt>),
     Line(usize),

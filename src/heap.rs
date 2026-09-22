@@ -34,6 +34,18 @@ pub struct Heap {
     free_list: Vec<usize>,
 }
 
+fn push_value_refs(val: &Value, worklist: &mut Vec<usize>) {
+    match val {
+        Value::ObjRef(id) => worklist.push(*id),
+        Value::Tuple(elements) => {
+            for elem in elements.iter() {
+                push_value_refs(elem, worklist);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl Heap {
     pub fn new() -> Self {
         Heap {
@@ -60,22 +72,16 @@ impl Heap {
                 match &heap_obj.data {
                     Obj::List(list) => {
                         for val in list {
-                            if let Value::ObjRef(child_id) = val {
-                                worklist.push(*child_id);
-                            }
+                            push_value_refs(val, &mut worklist);
                         }
                     }
                     Obj::Map(map) => {
                         for val in map.values() {
-                            if let Value::ObjRef(child_id) = val {
-                                worklist.push(*child_id);
-                            }
+                            push_value_refs(val, &mut worklist);
                         }
                     }
                     Obj::Upvalue(val) => {
-                        if let Value::ObjRef(child_id) = val {
-                            worklist.push(*child_id);
-                        }
+                        push_value_refs(val, &mut worklist);
                     }
                     Obj::Closure(_, upvalues) => {
                         for upvalue_id in upvalues {
@@ -84,24 +90,18 @@ impl Heap {
                     }
                     Obj::StructDef { methods, .. } => {
                         for val in methods.values() {
-                            if let Value::ObjRef(child_id) = val {
-                                worklist.push(*child_id);
-                            }
+                            push_value_refs(val, &mut worklist);
                         }
                     }
                     Obj::Instance { struct_id, fields } => {
                         worklist.push(*struct_id);
                         for val in fields.values() {
-                            if let Value::ObjRef(child_id) = val {
-                                worklist.push(*child_id);
-                            }
+                            push_value_refs(val, &mut worklist);
                         }
                     }
                     Obj::Channel(queue) => {
                         for val in queue {
-                            if let Value::ObjRef(ref_id) = val {
-                                worklist.push(*ref_id);
-                            }
+                            push_value_refs(val, &mut worklist);
                         }
                     }
                     Obj::Interface(_) => {}

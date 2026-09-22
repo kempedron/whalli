@@ -44,7 +44,7 @@
     },
     {
       "name": "support.class.whalli",
-      "match": "\\b(net|fs|time|math)\\b"
+      "match": "\\b(net|fs|time|math|json|os)\\b"
     },
     {
       "name": "support.function.builtin.whalli",

@@ -67,6 +67,7 @@ pub struct Token {
     pub line: usize,
 }
 
+#[derive(Debug)]
 pub struct LexError {
     pub message: String,
     pub line: usize,

@@ -41,6 +41,7 @@ pub enum OpCode {
     Not,
     SetLine(usize),
     Import(String),
+    ImportFile(String),
     GetUpvalue(usize),
     SetUpvalue(usize),
     Closure(Rc<FunctionObj>, Vec<UpvalueLoc>),

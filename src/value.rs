@@ -74,6 +74,18 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
+    pub fn compare(&self, other: &Value) -> std::cmp::Ordering {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Str(a), Value::Str(b)) => a.cmp(b),
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            _ => std::cmp::Ordering::Equal,
+        }
+    }
+
     pub fn call_method(
         &self,
         method_name: &str,
@@ -83,7 +95,72 @@ impl Value {
         match self {
             Value::Str(s) => match method_name {
                 "len" => Ok(Value::Int(s.len() as i64)),
+                "trim" => Ok(Value::Str(Rc::new(s.trim().to_string()))),
+                "to_lower" => Ok(Value::Str(Rc::new(s.to_lowercase()))),
+                "to_upper" => Ok(Value::Str(Rc::new(s.to_uppercase()))),
+                "contains" => {
+                    if args.len() != 1 {
+                        return Err("'contains' expects 1 argument (substring)".to_string());
+                    }
+                    match &args[0] {
+                        Value::Str(sub) => Ok(Value::Bool(s.contains(sub.as_str()))),
+                        _ => Err("'contains' expects a string argument".to_string()),
+                    }
+                }
+                "starts_with" => {
+                    if args.len() != 1 {
+                        return Err("'starts_with' expects 1 argument (prefix)".to_string());
+                    }
+                    match &args[0] {
+                        Value::Str(prefix) => Ok(Value::Bool(s.starts_with(prefix.as_str()))),
+                        _ => Err("'starts_with' expects a string argument".to_string()),
+                    }
+                }
+                "ends_with" => {
+                    if args.len() != 1 {
+                        return Err("'ends_with' expects 1 argument (suffix)".to_string());
+                    }
+                    match &args[0] {
+                        Value::Str(suffix) => Ok(Value::Bool(s.ends_with(suffix.as_str()))),
+                        _ => Err("'ends_with' expects a string argument".to_string()),
+                    }
+                }
+                "replace" => {
+                    if args.len() != 2 {
+                        return Err("'replace' expects 2 arguments (from, to)".to_string());
+                    }
+                    if let (Value::Str(from), Value::Str(to)) = (&args[0], &args[1]) {
+                        Ok(Value::Str(Rc::new(s.replace(from.as_str(), to.as_str()))))
+                    } else {
+                        Err("'replace' expects 2 string arguments".to_string())
+                    }
+                }
+                "split" => {
+                    if args.len() != 1 {
+                        return Err("'split' expects 1 argument (delimiter)".to_string());
+                    }
+                    match &args[0] {
+                        Value::Str(delimiter) => {
+                            let parts: Vec<Value> = s
+                                .split(delimiter.as_str())
+                                .map(|p| Value::Str(Rc::new(p.to_string())))
+                                .collect();
+                            let list_id = heap.alloc(Obj::List(parts));
+                            Ok(Value::ObjRef(list_id))
+                        }
+                        _ => Err("'split' expects a string delimiter".to_string()),
+                    }
+                }
                 _ => Err(format!("Method '{}' not found on string", method_name)),
+            },
+            Value::Tuple(elements) => match method_name {
+                "len" => Ok(Value::Int(elements.len() as i64)),
+                "sort" => {
+                    let mut sorted = (**elements).clone();
+                    sorted.sort_by(|a, b| a.compare(b));
+                    Ok(Value::Tuple(Rc::new(sorted)))
+                }
+                _ => Err(format!("Method '{}' not found on tuple", method_name)),
             },
             Value::ObjRef(id) => {
                 
@@ -119,6 +196,55 @@ impl Value {
                         "len" => {
                             if let Ok(Obj::List(list)) = heap.get(*id) {
                                 Ok(Value::Int(list.len() as i64))
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "sort" => {
+                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
+                                list.sort_by(|a, b| a.compare(b));
+                                Ok(Value::Nil)
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "reverse" => {
+                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
+                                list.reverse();
+                                Ok(Value::Nil)
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "clear" => {
+                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
+                                list.clear();
+                                Ok(Value::Nil)
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "contains" => {
+                            if args.len() != 1 {
+                                return Err("'contains' expects 1 argument".to_string());
+                            }
+                            if let Ok(Obj::List(list)) = heap.get(*id) {
+                                Ok(Value::Bool(list.contains(&args[0])))
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        "join" => {
+                            let sep = if args.is_empty() {
+                                ""
+                            } else if let Value::Str(ref s) = args[0] {
+                                s.as_str()
+                            } else {
+                                return Err("'join' expects a string separator".to_string());
+                            };
+                            if let Ok(Obj::List(list)) = heap.get(*id) {
+                                let parts: Vec<String> = list.iter().map(|item| item.stringify(heap)).collect();
+                                Ok(Value::Str(Rc::new(parts.join(sep))))
                             } else {
                                 unreachable!()
                             }

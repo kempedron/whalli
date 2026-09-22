@@ -424,6 +424,9 @@ impl Compiler {
             Stmt::Import(name) => {
                 self.emit(OpCode::Import(name.clone()));
             }
+            Stmt::ImportFile(path) => {
+                self.emit(OpCode::ImportFile(path.clone()));
+            }
             Stmt::Struct(name, fields) => {
                 let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
 

@@ -1,3 +1,6 @@
 /target
-main.wh
+*.wh
+!/std/**/*.wh
+!/src/**/*.wh
 test.txt
+*.vsix

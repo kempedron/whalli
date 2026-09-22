@@ -2,7 +2,7 @@
   "name": "whalli-lang",
   "displayName": "Whalli Language Support",
   "description": "Rich language support for the Whalli programming language, including LSP, diagnostics, autocomplete, hover docs, run button, and formatting.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "kepr",
   "icon": "icon.png",
   "galleryBanner": {

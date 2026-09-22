@@ -754,6 +754,7 @@ name = "whalli"
 version = "0.1.0"
 dependencies = [
  "mio",
+ "serde_json",
  "tokio",
  "tower-lsp",
 ]

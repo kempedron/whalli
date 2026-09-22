@@ -1,6 +1,8 @@
 mod fs;
+mod json;
 mod math;
 mod net;
+mod os;
 mod time;
 
 use crate::value::{NativeResult, Value};
@@ -190,6 +192,8 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     modules.insert("fs".to_string(), fs::register(vm));
     modules.insert("time".to_string(), time::register(vm));
     modules.insert("net".to_string(), net::register(vm));
+    modules.insert("json".to_string(), json::register(vm));
+    modules.insert("os".to_string(), os::register(vm));
 
     (globals, modules)
 }

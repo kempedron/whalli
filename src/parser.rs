@@ -6,6 +6,7 @@ use crate::{
     value::Value,
 };
 
+#[derive(Debug)]
 pub struct ParseError {
     pub message: String,
     pub line: usize,
@@ -267,12 +268,19 @@ impl Parser {
 
         if self.match_token(TokenKind::Import) {
             let name_token = self.advance().clone();
-            let module_name = match name_token {
-                TokenKind::Identifier(n) => n,
-                _ => return Err(self.error("Expected module name after 'import'")),
-            };
-            self.consume_stmt_end()?;
-            return Ok(Stmt::Import(module_name));
+            match name_token {
+                // import "./path/to/file.wh"  — local file import
+                TokenKind::Str(path) => {
+                    self.consume_stmt_end()?;
+                    return Ok(Stmt::ImportFile(path));
+                }
+                // import net  — stdlib module import
+                TokenKind::Identifier(n) => {
+                    self.consume_stmt_end()?;
+                    return Ok(Stmt::Import(n));
+                }
+                _ => return Err(self.error("Expected module name or file path string after 'import'")),
+            }
         }
 
         if self.match_token(TokenKind::Wo) {

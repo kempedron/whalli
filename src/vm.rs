@@ -4,7 +4,8 @@ use crate::{
     value::{FunctionObj, Value},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, SystemTime},
 };
@@ -20,6 +21,7 @@ pub struct CallFrame {
     pub base_offset: usize,
 }
 
+#[derive(Debug)]
 pub struct RuntimeError {
     pub message: String,
     pub line: usize,
@@ -45,11 +47,24 @@ pub struct VM {
     pub heap: heap::Heap,
     pub current_line: usize,
     pub gc_threshold: usize,
+    pub imported_files: HashSet<PathBuf>,
 
     pub poll: Poll,
     pub listeners: HashMap<usize, TcpListener>,
     pub streams: HashMap<usize, TcpStream>,
     pub next_token: usize,
+}
+
+fn mark_value(heap: &mut heap::Heap, val: &Value) {
+    match val {
+        Value::ObjRef(id) => heap.mark(*id),
+        Value::Tuple(elements) => {
+            for elem in elements.iter() {
+                mark_value(heap, elem);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl VM {
@@ -89,7 +104,8 @@ impl VM {
             modules: HashMap::new(),
             current_line: 1,
             heap,
-            gc_threshold: 1024,
+            gc_threshold: 256,
+            imported_files: HashSet::new(),
             poll: Poll::new().unwrap(),
             listeners: HashMap::new(),
             streams: HashMap::new(),
@@ -113,33 +129,36 @@ impl VM {
         return vm;
     }
 
-    pub fn collect_garbage(&mut self, current_task: &Task) {
+    pub fn collect_garbage(&mut self, current_task: &Task) -> usize {
         for val in &current_task.stack {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
-            }
+            mark_value(&mut self.heap, val);
+        }
+        for frame in &current_task.frames {
+            self.heap.mark(frame.closure_id);
         }
 
         for task in &self.tasks {
             for val in &task.stack {
-                if let Value::ObjRef(id) = val {
-                    self.heap.mark(*id);
-                }
+                mark_value(&mut self.heap, val);
+            }
+            for frame in &task.frames {
+                self.heap.mark(frame.closure_id);
             }
         }
 
         for val in self.globals.values() {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
-            }
+            mark_value(&mut self.heap, val);
         }
         for val in self.modules.values() {
-            if let Value::ObjRef(id) = val {
-                self.heap.mark(*id);
-            }
+            mark_value(&mut self.heap, val);
         }
 
-        // self.heap.sweep();
+        let freed = self.heap.sweep();
+
+        let live = self.heap.live_count();
+        self.gc_threshold = std::cmp::max(live * 2, 256);
+
+        freed
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
@@ -194,7 +213,6 @@ impl VM {
 
                 if self.heap.live_count() >= self.gc_threshold {
                     self.collect_garbage(&current_task);
-                    self.gc_threshold = std::cmp::max(self.heap.live_count() * 2, 1024);
                 }
 
                 macro_rules! pop {
@@ -729,6 +747,62 @@ impl VM {
                             }
                         }
 
+                        OpCode::ImportFile(path_str) => {
+                            let path = Path::new(&path_str);
+                            let resolved = if path.is_relative() {
+                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+                            } else {
+                                path.to_path_buf()
+                            };
+
+                            let canonical = resolved.canonicalize().map_err(|e| RuntimeError {
+                                message: format!("Cannot import file '{}': {}", path_str, e),
+                                line: self.current_line,
+                            })?;
+
+                            if !self.imported_files.contains(&canonical) {
+                                self.imported_files.insert(canonical.clone());
+
+                                let source = std::fs::read_to_string(&canonical).map_err(|e| RuntimeError {
+                                    message: format!("Cannot read import file '{}': {}", path_str, e),
+                                    line: self.current_line,
+                                })?;
+
+                                let mut lexer = crate::lexer::Lexer::new(&source);
+                                let tokens = lexer.tokenize().map_err(|e| RuntimeError {
+                                    message: format!("Lexer error in imported file '{}': {}", path_str, e.message),
+                                    line: e.line,
+                                })?;
+
+                                let mut parser = crate::parser::Parser::new(tokens);
+                                let ast = parser.parse().map_err(|e| RuntimeError {
+                                    message: format!("Syntax error in imported file '{}': {}", path_str, e.message),
+                                    line: e.line,
+                                })?;
+
+                                let compiler = crate::compiler::Compiler::new();
+                                let bytecode = compiler.compile(&ast);
+
+                                let imported_func = Rc::new(FunctionObj {
+                                    name: path_str.clone(),
+                                    arity: 0,
+                                    chunk: bytecode,
+                                    param_types: vec![],
+                                    return_type: None,
+                                });
+
+                                let closure_id = self.heap.alloc(heap::Obj::Closure(imported_func.clone(), vec![]));
+                                let base_offset = current_task.stack.len();
+                                current_task.frames.push(CallFrame {
+                                    closure_id,
+                                    function: imported_func,
+                                    ip: 0,
+                                    stack_offset: base_offset,
+                                    base_offset,
+                                });
+                            }
+                        }
+
                         OpCode::Return => {
                             let result = current_task.stack.pop().unwrap_or(Value::Nil);
                             let frame = current_task.frames.pop().unwrap();
@@ -1105,8 +1179,8 @@ impl VM {
                                                 current_task.stack.push(list[current_idx as usize].clone());
                                                 current_task.stack.push(Value::Bool(true));
                                             } else {
-                                                current_task.stack.push(Value::Nil); // Фейковый элемент
-                                                current_task.stack.push(Value::Bool(false)); // Флаг выхода
+                                                current_task.stack.push(Value::Nil);
+                                                current_task.stack.push(Value::Bool(false));
                                             }
                                         }
                                     }
@@ -1258,5 +1332,200 @@ impl VM {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::Compiler;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn run_code(code: &str) -> VM {
+        let mut lexer = Lexer::new(code);
+        let tokens = lexer.tokenize().expect("Lexer error");
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().expect("Parser error");
+        let compiler = Compiler::new();
+        let bytecode = compiler.compile(&ast);
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("Runtime error");
+        vm
+    }
+
+    #[test]
+    fn test_gc_reclaims_unreachable_memory() {
+        // Creates 600 temporary lists in a loop and discards them
+        let code = r#"
+        for i in range(600) {
+            let temp = new("list")
+            temp.push(i)
+        }
+        "#;
+        let vm = run_code(code);
+        // If GC didn't work, live_count would be > 600
+        // With GC, discarded lists are swept and reclaimed
+        assert!(
+            vm.heap.live_count() < 100,
+            "Expected live count < 100 after GC, got {}",
+            vm.heap.live_count()
+        );
+    }
+
+    #[test]
+    fn test_gc_preserves_reachable_references() {
+        // Preserves the surviving list in a global variable
+        let code = r#"
+        let keeper = new("list")
+        keeper.push("I am alive")
+
+        for i in range(500) {
+            let temp = new("list")
+            temp.push(i)
+        }
+        "#;
+        let vm = run_code(code);
+        let keeper_val = vm.globals.get("keeper").expect("keeper should exist");
+        if let Value::ObjRef(id) = keeper_val {
+            let obj = vm.heap.get(*id).expect("keeper object must survive GC");
+            if let crate::heap::Obj::List(list) = obj {
+                assert_eq!(list.len(), 1);
+            } else {
+                panic!("Expected list");
+            }
+        } else {
+            panic!("Expected ObjRef");
+        }
+    }
+
+    #[test]
+    fn test_json_encode_decode() {
+        let code = r#"
+        import json
+
+        let user = new("map")
+        user["name"] = "Alice"
+        user["age"] = 30
+        let encoded = json.encode(user)
+
+        let decoded = json.decode(encoded)
+        let name_val = decoded["name"]
+        let age_val = decoded["age"]
+        "#;
+        let vm = run_code(code);
+        let name_val = vm.globals.get("name_val").expect("name_val should exist");
+        assert_eq!(name_val, &Value::Str(Rc::new("Alice".to_string())));
+
+        let age_val = vm.globals.get("age_val").expect("age_val should exist");
+        assert_eq!(age_val, &Value::Int(30));
+    }
+
+    #[test]
+    fn test_os_module() {
+        let code = r#"
+        import os
+
+        let dir = os.cwd()
+        os.set_env("WHALLI_TEST_KEY", "whalli_123")
+        let read_back = os.env("WHALLI_TEST_KEY")
+        let non_existent = os.env("DEFINITELY_NOT_SET_12345")
+        "#;
+        let vm = run_code(code);
+        let read_back = vm.globals.get("read_back").expect("read_back should exist");
+        assert_eq!(read_back, &Value::Str(Rc::new("whalli_123".to_string())));
+
+        let non_existent = vm.globals.get("non_existent").expect("non_existent should exist");
+        assert_eq!(non_existent, &Value::Nil);
+    }
+
+    #[test]
+    fn test_collection_sort() {
+        let code = r#"
+        let numbers = new("list")
+        numbers.push(42)
+        numbers.push(10)
+        numbers.push(99)
+        numbers.push(5)
+        numbers.sort()
+
+        let words = new("list")
+        words.push("cherry")
+        words.push("apple")
+        words.push("banana")
+        words.sort()
+
+        let t = (30, 10, 20)
+        let sorted_t = t.sort()
+        "#;
+        let vm = run_code(code);
+
+        // Check list sort
+        let numbers_val = vm.globals.get("numbers").expect("numbers should exist");
+        if let Value::ObjRef(id) = numbers_val {
+            if let Ok(crate::heap::Obj::List(list)) = vm.heap.get(*id) {
+                assert_eq!(list, &[Value::Int(5), Value::Int(10), Value::Int(42), Value::Int(99)]);
+            } else {
+                panic!("Expected list");
+            }
+        }
+
+        let words_val = vm.globals.get("words").expect("words should exist");
+        if let Value::ObjRef(id) = words_val {
+            if let Ok(crate::heap::Obj::List(list)) = vm.heap.get(*id) {
+                assert_eq!(list[0], Value::Str(Rc::new("apple".to_string())));
+                assert_eq!(list[1], Value::Str(Rc::new("banana".to_string())));
+                assert_eq!(list[2], Value::Str(Rc::new("cherry".to_string())));
+            } else {
+                panic!("Expected list");
+            }
+        }
+
+        // Check tuple sort
+        let sorted_t_val = vm.globals.get("sorted_t").expect("sorted_t should exist");
+        if let Value::Tuple(elements) = sorted_t_val {
+            assert_eq!(elements.as_slice(), &[Value::Int(10), Value::Int(20), Value::Int(30)]);
+        } else {
+            panic!("Expected Tuple");
+        }
+    }
+
+    #[test]
+    fn test_string_and_list_methods() {
+        let code = r#"
+        let raw = "  apple,banana,orange  "
+        let trimmed = raw.trim()
+        let parts = trimmed.split(",")
+        let joined = parts.join(" - ")
+        let has_banana = parts.contains("banana")
+
+        let text = "hello world"
+        let replaced = text.replace("world", "whalli")
+        let upper = text.to_upper()
+        let starts = text.starts_with("hello")
+        let ends = text.ends_with("world")
+        "#;
+        let vm = run_code(code);
+
+        let trimmed = vm.globals.get("trimmed").expect("trimmed should exist");
+        assert_eq!(trimmed, &Value::Str(Rc::new("apple,banana,orange".to_string())));
+
+        let joined = vm.globals.get("joined").expect("joined should exist");
+        assert_eq!(joined, &Value::Str(Rc::new("apple - banana - orange".to_string())));
+
+        let has_banana = vm.globals.get("has_banana").expect("has_banana should exist");
+        assert_eq!(has_banana, &Value::Bool(true));
+
+        let replaced = vm.globals.get("replaced").expect("replaced should exist");
+        assert_eq!(replaced, &Value::Str(Rc::new("hello whalli".to_string())));
+
+        let upper = vm.globals.get("upper").expect("upper should exist");
+        assert_eq!(upper, &Value::Str(Rc::new("HELLO WORLD".to_string())));
+
+        let starts = vm.globals.get("starts").expect("starts should exist");
+        assert_eq!(starts, &Value::Bool(true));
+
+        let ends = vm.globals.get("ends").expect("ends should exist");
+        assert_eq!(ends, &Value::Bool(true));
     }
 }
