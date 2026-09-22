@@ -24,7 +24,7 @@
     },
     {
       "name": "keyword.control.whalli",
-      "match": "\\b(if|else|while|for|in|break|continue|return|wo)\\b"
+      "match": "\\b(if|else|while|for|in|break|continue|return|wo|match)\\b"
     },
     {
       "name": "keyword.declaration.whalli",
@@ -56,11 +56,11 @@
     },
     {
       "name": "keyword.operator.arrow.whalli",
-      "match": "(->|<-)"
+      "match": "(->|<-|=>)"
     },
     {
       "name": "keyword.operator.whalli",
-      "match": "(\\+|-|\\*|/|%|==|!=|<=|>=|<|>|=)"
+      "match": "(\\+|-|\\*|/|%|==|!=|<=|>=|<|>|=|\\?)"
     }
   ]
 }

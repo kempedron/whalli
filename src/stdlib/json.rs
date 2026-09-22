@@ -98,7 +98,7 @@ pub fn register(vm: &mut VM) -> Value {
         }),
     );
 
-    // json.decode(str) -> any
+    // json.decode(str) -> (value: any, err: str | nil)
     json_module.insert(
         "decode".to_string(),
         Value::Native(|args, vm| {
@@ -106,12 +106,17 @@ pub fn register(vm: &mut VM) -> Value {
                 match serde_json::from_str::<serde_json::Value>(json_str.as_str()) {
                     Ok(parsed) => {
                         let val = json_to_value(parsed, &mut vm.heap);
-                        NativeResult::Return(val)
+                        let res = Value::Tuple(Rc::new(vec![val, Value::Nil]));
+                        NativeResult::Return(res)
                     }
-                    Err(_) => NativeResult::Return(Value::Nil),
+                    Err(e) => {
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        NativeResult::Return(res)
+                    }
                 }
             } else {
-                NativeResult::Return(Value::Nil)
+                let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Expected JSON string".to_string()))]));
+                NativeResult::Return(res)
             }
         }),
     );

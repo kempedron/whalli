@@ -22,6 +22,24 @@ pub enum UnaryOp {
 }
 
 #[derive(Debug, Clone)]
+pub enum Pattern {
+    Wildcard,
+    Literal(Value),
+    Range { start: i64, end: i64, inclusive: bool },
+    Variable(String),
+    Type(String, String), // name: type (e.g. n: int)
+    Tuple(Vec<Pattern>),
+    Or(Vec<Pattern>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Value),
     Variable(String),
@@ -36,6 +54,11 @@ pub enum Expr {
     Tuple(Vec<Expr>),
     ChanSend(Box<Expr>, Box<Expr>), // ch <- val
     ChanRecv(Box<Expr>),            // <- ch
+    Try(Box<Expr>),                 // expr?
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
 }
 
 #[derive(Debug)]

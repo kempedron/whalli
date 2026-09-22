@@ -56,4 +56,5 @@ pub enum OpCode {
     ChanSend,
     ChanRecv,
     IterNext(usize),
+    PropagateError,
 }

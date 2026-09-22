@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    ast::{BinaryOp, Expr, Stmt, UnaryOp},
+    ast::{BinaryOp, Expr, MatchArm, Pattern, Stmt, UnaryOp},
     lexer::{Lexer, Token, TokenKind},
     value::Value,
 };
@@ -466,6 +466,25 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        if self.match_token(TokenKind::Match) {
+            return self.parse_match();
+        }
+
+        if self.match_token(TokenKind::Sub) {
+            let expr = self.parse_primary()?;
+            match expr {
+                Expr::Literal(Value::Int(n)) => return Ok(Expr::Literal(Value::Int(-n))),
+                Expr::Literal(Value::Float(f)) => return Ok(Expr::Literal(Value::Float(-f))),
+                other => {
+                    return Ok(Expr::Binary(
+                        Box::new(Expr::Literal(Value::Int(0))),
+                        BinaryOp::Sub,
+                        Box::new(other),
+                    ));
+                }
+            }
+        }
+
         if self.match_token(TokenKind::Not) {
             let expr = self.parse_primary()?;
             return Ok(Expr::Unary(UnaryOp::Not, Box::new(expr)));
@@ -594,6 +613,8 @@ impl Parser {
                     let string_key = Expr::Literal(Value::Str(Rc::new(prop_name)));
                     expr = Expr::Index(Box::new(expr), Box::new(string_key));
                 }
+            } else if self.match_token(TokenKind::Question) {
+                expr = Expr::Try(Box::new(expr));
             } else {
                 break;
             }
@@ -743,6 +764,118 @@ impl Parser {
                 TokenKind::Identifier(n) => Ok(n),
                 _ => Err(self.error("Expected type name")),
             }
+        }
+    }
+
+    fn parse_match(&mut self) -> Result<Expr, ParseError> {
+        let subject = self.parse_expression()?;
+        while self.match_token(TokenKind::NewLine) {}
+        self.consume(TokenKind::LBrace, "Expected '{' after match expression")?;
+
+        let mut arms = Vec::new();
+        while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+            while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {}
+            if self.check_token(TokenKind::RBrace) {
+                break;
+            }
+            arms.push(self.parse_match_arm()?);
+            while self.match_token(TokenKind::Comma) || self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {}
+        }
+        self.consume(TokenKind::RBrace, "Expected '}' after match block")?;
+
+        Ok(Expr::Match {
+            subject: Box::new(subject),
+            arms,
+        })
+    }
+
+    fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {
+        let pattern = self.parse_pattern()?;
+        let guard = if self.match_token(TokenKind::If) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.consume(TokenKind::FatArrow, "Expected '=>' after pattern")?;
+        while self.match_token(TokenKind::NewLine) {}
+
+        let body = self.parse_expression()?;
+
+        Ok(MatchArm {
+            pattern,
+            guard,
+            body,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let first = self.parse_single_pattern()?;
+        if self.check_token(TokenKind::Pipe) {
+            let mut alternatives = vec![first];
+            while self.match_token(TokenKind::Pipe) {
+                alternatives.push(self.parse_single_pattern()?);
+            }
+            Ok(Pattern::Or(alternatives))
+        } else {
+            Ok(first)
+        }
+    }
+
+    fn parse_single_pattern(&mut self) -> Result<Pattern, ParseError> {
+        while self.match_token(TokenKind::NewLine) {}
+
+        if self.match_token(TokenKind::LParen) {
+            let mut elements = Vec::new();
+            if !self.check_token(TokenKind::RParen) {
+                loop {
+                    elements.push(self.parse_pattern()?);
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.consume(TokenKind::RParen, "Expected ')' after tuple pattern")?;
+            return Ok(Pattern::Tuple(elements));
+        }
+
+        let token = self.advance().clone();
+        match token {
+            TokenKind::Identifier(name) => {
+                if name == "_" {
+                    Ok(Pattern::Wildcard)
+                } else if self.match_token(TokenKind::Colon) {
+                    let type_name = self.parse_type_name()?;
+                    Ok(Pattern::Type(name, type_name))
+                } else {
+                    Ok(Pattern::Variable(name))
+                }
+            }
+            TokenKind::Int(start) => {
+                if self.match_token(TokenKind::DotDotEqual) {
+                    let end_token = self.advance().clone();
+                    if let TokenKind::Int(end) = end_token {
+                        Ok(Pattern::Range { start, end, inclusive: true })
+                    } else {
+                        Err(self.error("Expected integer after '..=' in pattern"))
+                    }
+                } else if self.match_token(TokenKind::DotDot) {
+                    let end_token = self.advance().clone();
+                    if let TokenKind::Int(end) = end_token {
+                        Ok(Pattern::Range { start, end, inclusive: false })
+                    } else {
+                        Err(self.error("Expected integer after '..' in pattern"))
+                    }
+                } else {
+                    Ok(Pattern::Literal(Value::Int(start)))
+                }
+            }
+            TokenKind::Float(f) => Ok(Pattern::Literal(Value::Float(f))),
+            TokenKind::Str(s) => Ok(Pattern::Literal(Value::Str(std::rc::Rc::new(s)))),
+            TokenKind::True => Ok(Pattern::Literal(Value::Bool(true))),
+            TokenKind::False => Ok(Pattern::Literal(Value::Bool(false))),
+            TokenKind::Nil => Ok(Pattern::Literal(Value::Nil)),
+            other => Err(self.error(&format!("Expected pattern, found {:?}", other))),
         }
     }
 }

@@ -56,6 +56,12 @@ pub enum TokenKind {
     Arrow,  // -> (to specify the value to be returned)
     Wo,     // woroutines (lightweight threads)
     LArrow, // <-
+    Question, // ? (error propagation)
+    Match,    // match
+    FatArrow, // =>
+    Pipe,     // |
+    DotDot,   // ..
+    DotDotEqual, // ..=
     Nil,
     Error(String),
     Eof,
@@ -149,8 +155,16 @@ impl Lexer {
                     self.pos += 1;
                 }
                 '.' => {
-                    tokens.push(self.make_token(TokenKind::Dot));
-                    self.pos += 1;
+                    if self.pos + 2 < self.chars.len() && self.chars[self.pos + 1] == '.' && self.chars[self.pos + 2] == '=' {
+                        tokens.push(self.make_token(TokenKind::DotDotEqual));
+                        self.pos += 3;
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '.' {
+                        tokens.push(self.make_token(TokenKind::DotDot));
+                        self.pos += 2;
+                    } else {
+                        tokens.push(self.make_token(TokenKind::Dot));
+                        self.pos += 1;
+                    }
                 }
                 '+' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
@@ -208,6 +222,9 @@ impl Lexer {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '=' {
                         self.pos += 2;
                         tokens.push(self.make_token(TokenKind::Equal));
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '>' {
+                        self.pos += 2;
+                        tokens.push(self.make_token(TokenKind::FatArrow));
                     } else {
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::Assign));
@@ -249,6 +266,14 @@ impl Lexer {
                 }
                 ',' => {
                     tokens.push(self.make_token(TokenKind::Comma));
+                    self.pos += 1;
+                }
+                '?' => {
+                    tokens.push(self.make_token(TokenKind::Question));
+                    self.pos += 1;
+                }
+                '|' => {
+                    tokens.push(self.make_token(TokenKind::Pipe));
                     self.pos += 1;
                 }
                 'f' => {
@@ -352,6 +377,7 @@ impl Lexer {
             "nil" => TokenKind::Nil,
             "interface" => TokenKind::Interface,
             "wo" => TokenKind::Wo,
+            "match" => TokenKind::Match,
             _ => TokenKind::Identifier(word),
         }
     }
@@ -360,21 +386,28 @@ impl Lexer {
         let mut num_str = String::new();
         let mut is_float = false;
 
-        while self.pos < self.chars.len()
-            && (self.chars[self.pos].is_ascii_digit()
-                || self.chars[self.pos] == '.'
-                || self.chars[self.pos] == '_')
-        {
+        while self.pos < self.chars.len() {
             let ch = self.chars[self.pos];
             if ch == '_' {
                 self.pos += 1;
                 continue;
             }
             if ch == '.' {
+                // If followed by another dot, it's a range operator '..' or '..=', not a float
+                if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '.' {
+                    break;
+                }
                 is_float = true;
+                num_str.push(ch);
+                self.pos += 1;
+                continue;
             }
-            num_str.push(ch);
-            self.pos += 1;
+            if ch.is_ascii_digit() {
+                num_str.push(ch);
+                self.pos += 1;
+                continue;
+            }
+            break;
         }
         if is_float {
             let val = num_str.parse::<f64>().expect("Error parsing Float");

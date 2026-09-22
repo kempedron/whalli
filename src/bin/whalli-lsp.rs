@@ -873,12 +873,13 @@ impl LanguageServer for Backend {
             items.push(create_snippet("wo", "Spawn async woroutine", "wo ${1:func_name}(${2})"));
             items.push(create_snippet("import file", "Import local .wh file", "import \"./${1:file}.wh\""));
             items.push(create_snippet("import std", "Import standard library module", "import ${1|net,fs,time,math,json,os|}"));
+            items.push(create_snippet("match", "Pattern matching expression", "match ${1:expression} {\n\t${2:pattern} => ${0}\n}"));
 
             // Keywords
             for kw in [
                 "let", "func", "return", "if", "else", "while", "for", "in",
                 "and", "or", "not", "break", "continue", "import", "struct",
-                "impl", "is", "interface", "wo", "true", "false", "nil",
+                "impl", "is", "interface", "wo", "match", "true", "false", "nil",
             ] {
                 items.push(CompletionItem {
                     label: kw.to_string(),
@@ -1523,25 +1524,25 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
     let doc_str = if let Some(rec) = receiver {
         match (rec, word) {
             ("net", "listen") => {
-                "```whalli\nfunc net.listen(port: int) -> int\n```\nBinds a non-blocking TCP server listener to `127.0.0.1:<port>` registered with the MIO asynchronous event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet server = net.listen(8080)\nlet client = net.accept(server)\n```\n\n#### Parameters\n- `port`: The TCP port number to bind on localhost.\n\n#### Returns\n`int`: An integer descriptor token representing the server socket."
+                "```whalli\nfunc net.listen(port: int) -> (server_id: int, err: str | nil)\n```\nBinds a non-blocking TCP server listener to `127.0.0.1:<port>` registered with the MIO asynchronous event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (server, err) = net.listen(8080)\nif err != nil {\n    println(\"Bind failed:\", err)\n    return\n}\n```\n\n#### Parameters\n- `port`: The TCP port number to bind on localhost.\n\n#### Returns\nTuple `(server_id, err)`: Server socket token ID, or error message."
             }
             ("net", "accept") => {
-                "```whalli\nfunc net.accept(server_id: int) -> int\n```\nAccepts an incoming TCP connection on the specified server socket. Suspends the current woroutine until a client connects.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet srv = net.listen(8080)\nlet client = net.accept(srv)\nprintln(\"New client connected:\", client)\n```\n\n#### Parameters\n- `server_id`: The server token ID returned from `net.listen`.\n\n#### Returns\n`int`: A client connection token ID for read/write operations."
+                "```whalli\nfunc net.accept(server_id: int) -> int\n```\nAccepts an incoming TCP connection on the specified server socket. Suspends the current woroutine until a client connects.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (srv, err) = net.listen(8080)\nlet client = net.accept(srv)\nprintln(\"New client connected:\", client)\n```\n\n#### Parameters\n- `server_id`: The server token ID returned from `net.listen`.\n\n#### Returns\n`int`: A client connection token ID for read/write operations."
             }
             ("net", "read") => {
-                "```whalli\nfunc net.read(client_id: int) -> str\n```\nReads available data bytes (up to 4096 bytes) from the client socket. Suspends the current woroutine until data arrives.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet data = net.read(client)\nif data != nil {\n    println(\"Received:\", data)\n}\n```\n\n#### Parameters\n- `client_id`: The client socket token returned by `net.accept`.\n\n#### Returns\n`str`: Received data as a string, or `nil` if the client disconnected."
+                "```whalli\nfunc net.read(client_id: int) -> (data: str, err: str | nil)\n```\nReads available data bytes (up to 4096 bytes) from the client socket. Suspends the current woroutine until data arrives.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (data, err) = net.read(client)\nif err != nil {\n    println(\"Read error:\", err)\n} else if data != nil {\n    println(\"Received:\", data)\n}\n```\n\n#### Parameters\n- `client_id`: The client socket token returned by `net.accept`.\n\n#### Returns\nTuple `(data, err)`: Received string payload, or error description."
             }
             ("net", "write") => {
-                "```whalli\nfunc net.write(client_id: int, data: str) -> bool\n```\nTransmits a string of bytes over the client TCP socket. Suspends the current woroutine if socket buffer is full.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet ok = net.write(client, \"HTTP/1.1 200 OK\\r\\n\\r\\nHello!\")\n```\n\n#### Parameters\n- `client_id`: The client socket token.\n- `data`: The string payload to send.\n\n#### Returns\n`bool`: `true` if transmission succeeded, `false` otherwise."
+                "```whalli\nfunc net.write(client_id: int, data: str) -> (ok: bool, err: str | nil)\n```\nTransmits a string of bytes over the client TCP socket. Suspends the current woroutine if socket buffer is full.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (ok, err) = net.write(client, \"HTTP/1.1 200 OK\\r\\n\\r\\nHello!\")\n```\n\n#### Parameters\n- `client_id`: The client socket token.\n- `data`: The string payload to send.\n\n#### Returns\nTuple `(ok, err)`: Boolean success flag and optional error message."
             }
             ("net", "close") => {
                 "```whalli\nfunc net.close(client_id: int) -> bool\n```\nCloses the client connection and deregisters the stream from the event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nnet.close(client)\n```\n\n#### Parameters\n- `client_id`: The socket token to close."
             }
             ("fs", "read") => {
-                "```whalli\nfunc fs.read(path: str) -> str\n```\nReads the entire contents of a file at the specified path into a string.\n\n---\n\n### Examples\n```whalli\nimport fs\n\nlet content = fs.read(\"config.txt\")\nprintln(\"File content:\", content)\n```\n\n#### Parameters\n- `path`: File path relative to current working directory or absolute.\n\n#### Returns\n`str`: File contents as a string, or error string if read failed."
+                "```whalli\nfunc fs.read(path: str) -> (content: str, err: str | nil)\n```\nReads the entire contents of a file at the specified path into a string.\n\n---\n\n### Examples\n```whalli\nimport fs\n\nlet (content, err) = fs.read(\"config.txt\")\nif err != nil {\n    println(\"Failed to read file:\", err)\n    return\n}\nprintln(\"File content:\", content)\n```\n\n#### Parameters\n- `path`: File path relative to current working directory or absolute.\n\n#### Returns\nTuple `(content, err)`: File content string and optional error message."
             }
             ("fs", "write") => {
-                "```whalli\nfunc fs.write(path: str, data: str) -> bool\n```\nWrites data string to the specified file path, replacing existing contents or creating the file.\n\n---\n\n### Examples\n```whalli\nimport fs\n\nlet ok = fs.write(\"output.txt\", \"Hello World!\")\n```\n\n#### Parameters\n- `path`: Destination file path.\n- `data`: String content to write.\n\n#### Returns\n`bool`: `true` on success, `false` on I/O error."
+                "```whalli\nfunc fs.write(path: str, data: str) -> (ok: bool, err: str | nil)\n```\nWrites data string to the specified file path, replacing existing contents or creating the file.\n\n---\n\n### Examples\n```whalli\nimport fs\n\nlet (ok, err) = fs.write(\"output.txt\", \"Hello World!\")\nif err != nil {\n    println(\"Write error:\", err)\n}\n```\n\n#### Parameters\n- `path`: Destination file path.\n- `data`: String content to write.\n\n#### Returns\nTuple `(ok, err)`: Boolean success status and optional error message."
             }
             ("time", "now") => {
                 "```whalli\nfunc time.now() -> float\n```\nReturns the current UNIX timestamp in seconds with fractional floating-point precision.\n\n---\n\n### Examples\n```whalli\nimport time\n\nlet start = time.now()\n// do work...\nlet elapsed = time.now() - start\nprintln(\"Elapsed seconds:\", elapsed)\n```\n\n#### Returns\n`float`: Seconds elapsed since UNIX Epoch (January 1, 1970)."
@@ -1732,6 +1733,9 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "true" => "Boolean literal representing truth (`true`).".to_string(),
             "false" => "Boolean literal representing falsehood (`false`).".to_string(),
             "nil" => "Literal representing absence of value (`nil`).".to_string(),
+            "match" => {
+                "### Keyword `match` (Pattern Matching)\nMatches an expression against a set of patterns and evaluates the corresponding arm body.\nSupports literal values, numeric ranges (`..` and `..=`), tuple destructuring, type checking (`n: int`), alternatives (`|`), guards (`if <expr>`), and wildcard (`_`).\n\n---\n\n### Examples\n```whalli\nlet grade = match score {\n    90..=100 => \"A\",\n    80..90   => \"B\",\n    0..80    => \"F\",\n    _        => \"Invalid\"\n}\n\nmatch (x, y) {\n    (0, 0) => println(\"Origin\"),\n    (a, b) if a == b => println(\"Diagonal\"),\n    (a, b) => println(f\"Point: {a}, {b}\")\n}\n```".to_string()
+            }
             _ => {
                 if let Some(f) = index.functions.iter().find(|f| f.name == word) {
                     format_func_signature(f)
@@ -2315,14 +2319,14 @@ fn get_known_signature(name: &str, index: &DocumentIndex) -> Option<SignatureInf
         "str" => ("str(val: any) -> str", vec!["val: any"], "Converts value to string representation"),
         "bool" => ("bool(val: any) -> bool", vec!["val: any"], "Converts value to boolean true or false"),
 
-        "net.listen" => ("net.listen(port: int) -> int", vec!["port: int"], "Starts non-blocking TCP server on 127.0.0.1"),
+        "net.listen" => ("net.listen(port: int) -> (server_id: int, err: str | nil)", vec!["port: int"], "Starts non-blocking TCP server on 127.0.0.1"),
         "net.accept" => ("net.accept(server_id: int) -> int", vec!["server_id: int"], "Accepts incoming client connection"),
-        "net.read" => ("net.read(client_id: int) -> str", vec!["client_id: int"], "Reads data string from client socket"),
-        "net.write" => ("net.write(client_id: int, data: str) -> bool", vec!["client_id: int", "data: str"], "Writes data string to client socket"),
+        "net.read" => ("net.read(client_id: int) -> (data: str, err: str | nil)", vec!["client_id: int"], "Reads data string from client socket"),
+        "net.write" => ("net.write(client_id: int, data: str) -> (ok: bool, err: str | nil)", vec!["client_id: int", "data: str"], "Writes data string to client socket"),
         "net.close" => ("net.close(client_id: int) -> bool", vec!["client_id: int"], "Closes client socket and removes from event loop"),
 
-        "fs.read" => ("fs.read(path: str) -> str", vec!["path: str"], "Reads file contents into a string"),
-        "fs.write" => ("fs.write(path: str, data: str) -> bool", vec!["path: str", "data: str"], "Writes data string to a file"),
+        "fs.read" => ("fs.read(path: str) -> (content: str, err: str | nil)", vec!["path: str"], "Reads file contents into a string"),
+        "fs.write" => ("fs.write(path: str, data: str) -> (ok: bool, err: str | nil)", vec!["path: str", "data: str"], "Writes data string to a file"),
 
         "time.now" => ("time.now() -> float", vec![], "Current UNIX timestamp in seconds"),
         "time.sleep" => ("time.sleep(seconds: float)", vec!["seconds: float"], "Suspends woroutine for specified duration"),
@@ -2330,7 +2334,7 @@ fn get_known_signature(name: &str, index: &DocumentIndex) -> Option<SignatureInf
         "math.sin" => ("math.sin(rad: float) -> float", vec!["rad: float"], "Trigonometric sine function"),
 
         "json.encode" => ("json.encode(data: any) -> str", vec!["data: any"], "Serializes Whalli value into formatted JSON string"),
-        "json.decode" => ("json.decode(json_str: str) -> any", vec!["json_str: str"], "Parses JSON string into native Whalli data structures"),
+        "json.decode" => ("json.decode(json_str: str) -> (data: any, err: str | nil)", vec!["json_str: str"], "Parses JSON string into native Whalli data structures"),
 
         "os.args" => ("os.args() -> list", vec![], "Returns command line arguments passed to current process"),
         "os.env" => ("os.env(key: str) -> str", vec!["key: str"], "Reads environment variable value"),
@@ -2532,7 +2536,32 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
                 continue;
             }
 
-            if ['+', '-', '*', '/', '%', '=', '!', '<', '>'].contains(&c) {
+            if c == '=' && i + 1 < chars.len() && chars[i + 1] == '>' {
+                raw_tokens.push(RawSemanticToken {
+                    line: line_idx as u32,
+                    start_char: i as u32,
+                    length: 2,
+                    token_type: 8, // OPERATOR
+                    token_modifiers: 0,
+                });
+                i += 2;
+                continue;
+            }
+
+            if c == '.' && i + 1 < chars.len() && chars[i + 1] == '.' {
+                let len = if i + 2 < chars.len() && chars[i + 2] == '=' { 3 } else { 2 };
+                raw_tokens.push(RawSemanticToken {
+                    line: line_idx as u32,
+                    start_char: i as u32,
+                    length: len,
+                    token_type: 8, // OPERATOR
+                    token_modifiers: 0,
+                });
+                i += len as usize;
+                continue;
+            }
+
+            if ['+', '-', '*', '/', '%', '=', '!', '<', '>', '?', '|'].contains(&c) {
                 let start = i;
                 i += 1;
                 if i < chars.len() && chars[i] == '=' {
@@ -2580,7 +2609,7 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
                 let (token_type, token_modifiers) = match word.as_str() {
                     "let" | "func" | "return" | "if" | "else" | "while" | "for" | "in"
                     | "break" | "continue" | "import" | "struct" | "impl" | "is"
-                    | "interface" | "wo" | "true" | "false" | "nil" => (0, 0), // KEYWORD
+                    | "interface" | "wo" | "match" | "true" | "false" | "nil" => (0, 0), // KEYWORD
 
                     "and" | "or" | "not" => (8, 0), // OPERATOR
 

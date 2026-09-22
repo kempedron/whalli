@@ -10,28 +10,43 @@ use std::rc::Rc;
 pub fn register(vm: &mut VM) -> Value {
     let mut net_module = HashMap::new();
 
+    // net.listen(port: int) -> (server_id: int, err: str | nil)
     net_module.insert(
         "listen".to_string(),
         Value::Native(|args, vm| {
             if let Some(Value::Int(port)) = args.first() {
-                let addr = format!("127.0.0.1:{}", port).parse().unwrap();
+                let addr_str = format!("127.0.0.1:{}", port);
+                let addr: std::net::SocketAddr = match addr_str.parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        return NativeResult::Return(res);
+                    }
+                };
 
-                let mut listener = TcpListener::bind(addr).unwrap();
+                let mut listener = match TcpListener::bind(addr) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        return NativeResult::Return(res);
+                    }
+                };
 
                 let token_id = vm.next_token;
                 vm.next_token += 1;
                 let token = Token(token_id);
 
-                vm.poll
-                    .registry()
-                    .register(&mut listener, token, Interest::READABLE)
-                    .unwrap();
+                if let Err(e) = vm.poll.registry().register(&mut listener, token, Interest::READABLE) {
+                    let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                    return NativeResult::Return(res);
+                }
 
                 vm.listeners.insert(token_id, listener);
-
-                return NativeResult::Return(Value::Int(token_id as i64));
+                let res = Value::Tuple(Rc::new(vec![Value::Int(token_id as i64), Value::Nil]));
+                return NativeResult::Return(res);
             }
-            NativeResult::Return(Value::Nil)
+            let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Expected integer port".to_string()))]));
+            NativeResult::Return(res)
         }),
     );
 
@@ -73,7 +88,7 @@ pub fn register(vm: &mut VM) -> Value {
         }),
     );
 
-    // net.read(client_id) -> string
+    // net.read(client_id) -> (data: str | nil, err: str | nil)
     net_module.insert(
         "read".to_string(),
         Value::Native(|args, vm| {
@@ -82,33 +97,40 @@ pub fn register(vm: &mut VM) -> Value {
 
                 let stream = match vm.streams.get_mut(&client_id) {
                     Some(s) => s,
-                    None => return NativeResult::Return(Value::Nil),
+                    None => {
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Invalid socket client_id".to_string()))]));
+                        return NativeResult::Return(res);
+                    }
                 };
 
                 let mut buffer = [0; 4096];
                 match stream.read(&mut buffer) {
                     Ok(0) => {
                         vm.streams.remove(&client_id);
-                        return NativeResult::Return(Value::Nil);
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Nil])); // EOF
+                        return NativeResult::Return(res);
                     }
                     Ok(n) => {
                         let data = String::from_utf8_lossy(&buffer[..n]).to_string();
-                        return NativeResult::Return(Value::Str(Rc::new(data)));
+                        let res = Value::Tuple(Rc::new(vec![Value::Str(Rc::new(data)), Value::Nil]));
+                        return NativeResult::Return(res);
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         return NativeResult::SuspendIO(Token(client_id));
                     }
-                    Err(_) => {
+                    Err(e) => {
                         vm.streams.remove(&client_id);
-                        return NativeResult::Return(Value::Nil);
+                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        return NativeResult::Return(res);
                     }
                 }
             }
-            NativeResult::Return(Value::Nil)
+            let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Expected integer client_id".to_string()))]));
+            NativeResult::Return(res)
         }),
     );
 
-    // net.write(client_id, "string") -> bool
+    // net.write(client_id, "string") -> (ok: bool, err: str | nil)
     net_module.insert(
         "write".to_string(),
         Value::Native(|args, vm| {
@@ -118,24 +140,30 @@ pub fn register(vm: &mut VM) -> Value {
 
                     let stream = match vm.streams.get_mut(&client_id) {
                         Some(s) => s,
-                        None => return NativeResult::Return(Value::Bool(false)),
+                        None => {
+                            let res = Value::Tuple(Rc::new(vec![Value::Bool(false), Value::Str(Rc::new("Invalid client_id".to_string()))]));
+                            return NativeResult::Return(res);
+                        }
                     };
 
                     match stream.write(data.as_bytes()) {
                         Ok(_) => {
-                            return NativeResult::Return(Value::Bool(true));
+                            let res = Value::Tuple(Rc::new(vec![Value::Bool(true), Value::Nil]));
+                            return NativeResult::Return(res);
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             return NativeResult::SuspendIO(Token(client_id));
                         }
-                        Err(_) => {
+                        Err(e) => {
                             vm.streams.remove(&client_id);
-                            return NativeResult::Return(Value::Bool(false));
+                            let res = Value::Tuple(Rc::new(vec![Value::Bool(false), Value::Str(Rc::new(e.to_string()))]));
+                            return NativeResult::Return(res);
                         }
                     }
                 }
             }
-            NativeResult::Return(Value::Bool(false))
+            let res = Value::Tuple(Rc::new(vec![Value::Bool(false), Value::Str(Rc::new("Expected client_id and data string".to_string()))]));
+            NativeResult::Return(res)
         }),
     );
 

@@ -624,6 +624,237 @@ impl Compiler {
                 self.compile_expr(chan);
                 self.emit(OpCode::ChanRecv);
             }
+            Expr::Try(inner) => {
+                self.compile_expr(inner);
+                self.emit(OpCode::PropagateError);
+            }
+            Expr::Match { subject, arms } => {
+                self.compile_match(subject, arms);
+            }
+        }
+    }
+
+    fn compile_match(&mut self, subject: &Expr, arms: &[crate::ast::MatchArm]) {
+        // 1. Evaluate subject and place it in a local slot on stack
+        self.compile_expr(subject);
+
+        let subj_depth = self.current_state().scope_depth + 1;
+        let subj_slot = self.current_state().locals.len();
+        self.current_state().locals.push(Local {
+            name: format!("<match_subj_{}>", subj_slot),
+            depth: subj_depth,
+        });
+
+        let mut end_jumps = Vec::new();
+
+        for arm in arms {
+            let arm_locals_start = self.current_state().locals.len();
+
+            // 1. Compile pattern check for this arm (leaves 1 bool on stack)
+            self.compile_pattern_check(&arm.pattern, subj_slot);
+
+            // If pattern doesn't match, jump directly to next arm (no variables were bound)
+            let fail_pattern_jump = self.emit_jump(OpCode::JumpIfFalse(0));
+
+            // 2. Pattern matched! Now bind variables for guards and body
+            self.bind_pattern_variables(&arm.pattern, subj_slot);
+            let bound_count = self.current_state().locals.len() - arm_locals_start;
+
+            // 3. Evaluate guard if present
+            let mut guard_fail_jump = None;
+            if let Some(ref guard) = arm.guard {
+                self.compile_expr(guard);
+                guard_fail_jump = Some(self.emit_jump(OpCode::JumpIfFalse(0)));
+            }
+
+            // 4. Evaluate arm body
+            self.compile_expr(&arm.body);
+
+            // Store result into subject slot (reusing slot for match result)
+            self.emit(OpCode::SetLocal(subj_slot));
+
+            // Pop bound variables from stack
+            for _ in 0..bound_count {
+                self.emit(OpCode::Pop);
+            }
+            self.current_state().locals.truncate(arm_locals_start);
+
+            // Jump to end of entire match
+            end_jumps.push(self.emit_jump(OpCode::Jump(0)));
+
+            // 5. Failure paths
+            if let Some(g_jump) = guard_fail_jump {
+                let skip_cleanup = self.emit_jump(OpCode::Jump(0));
+
+                let guard_fail_landing = self.current_ip();
+                self.patch_jump(g_jump, guard_fail_landing);
+
+                for _ in 0..bound_count {
+                    self.emit(OpCode::Pop);
+                }
+
+                let arm_next = self.current_ip();
+                self.patch_jump(skip_cleanup, arm_next);
+                self.patch_jump(fail_pattern_jump, arm_next);
+            } else {
+                let next_target = self.current_ip();
+                self.patch_jump(fail_pattern_jump, next_target);
+            }
+        }
+
+        // Default if no arms matched: set nil to subject slot
+        self.emit(OpCode::Push(Value::Nil));
+        self.emit(OpCode::SetLocal(subj_slot));
+
+        // Patch all successful arm jumps to here
+        let end_target = self.current_ip();
+        for j in end_jumps {
+            self.patch_jump(j, end_target);
+        }
+
+        // Pop subject marker from compiler locals so stack slot now holds match result
+        self.current_state().locals.pop();
+    }
+
+    fn bind_pattern_variables(&mut self, pattern: &crate::ast::Pattern, subj_slot: usize) {
+        use crate::ast::Pattern;
+
+        match pattern {
+            Pattern::Variable(name) => {
+                self.emit(OpCode::LoadLocal(subj_slot));
+                let depth = self.current_state().scope_depth;
+                self.current_state().locals.push(Local {
+                    name: name.clone(),
+                    depth,
+                });
+            }
+            Pattern::Type(name, _) => {
+                self.emit(OpCode::LoadLocal(subj_slot));
+                let depth = self.current_state().scope_depth;
+                self.current_state().locals.push(Local {
+                    name: name.clone(),
+                    depth,
+                });
+            }
+            Pattern::Tuple(elements) => {
+                for (idx, elem_pat) in elements.iter().enumerate() {
+                    self.emit(OpCode::LoadLocal(subj_slot));
+                    self.emit(OpCode::Push(Value::Int(idx as i64)));
+                    self.emit(OpCode::IndexGet);
+
+                    let depth = self.current_state().scope_depth;
+                    let elem_slot = self.current_state().locals.len();
+                    self.current_state().locals.push(Local {
+                        name: format!("<tuple_elem_{}>", elem_slot),
+                        depth,
+                    });
+                    self.bind_pattern_variables(elem_pat, elem_slot);
+                }
+            }
+            Pattern::Or(alternatives) => {
+                // If alternatives have variables, bind from first alternative
+                if let Some(first) = alternatives.first() {
+                    self.bind_pattern_variables(first, subj_slot);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn compile_pattern_check(&mut self, pattern: &crate::ast::Pattern, subj_slot: usize) {
+        use crate::ast::Pattern;
+
+        match pattern {
+            Pattern::Wildcard | Pattern::Variable(_) => {
+                self.emit(OpCode::Push(Value::Bool(true)));
+            }
+            Pattern::Literal(val) => {
+                self.emit(OpCode::LoadLocal(subj_slot));
+                self.emit(OpCode::Push(val.clone()));
+                self.emit(OpCode::Equal);
+            }
+            Pattern::Range { start, end, inclusive } => {
+                // Check subj >= start
+                self.emit(OpCode::LoadLocal(subj_slot));
+                self.emit(OpCode::Push(Value::Int(*start)));
+                self.emit(OpCode::GreaterEqual);
+
+                // Check subj <= end (or < end)
+                self.emit(OpCode::LoadLocal(subj_slot));
+                self.emit(OpCode::Push(Value::Int(*end)));
+                if *inclusive {
+                    self.emit(OpCode::LessEqual);
+                } else {
+                    self.emit(OpCode::Less);
+                }
+
+                self.emit(OpCode::And);
+            }
+            Pattern::Type(_, type_name) => {
+                self.emit(OpCode::LoadLocal(subj_slot));
+                self.emit(OpCode::LoadGlobal(type_name.clone()));
+                self.emit(OpCode::CheckIs);
+            }
+            Pattern::Tuple(elements) => {
+                let expected_len = elements.len();
+                if expected_len == 0 {
+                    self.emit(OpCode::Push(Value::Bool(true)));
+                    return;
+                }
+
+                for (idx, elem_pat) in elements.iter().enumerate() {
+                    self.emit(OpCode::LoadLocal(subj_slot));
+                    self.emit(OpCode::Push(Value::Int(idx as i64)));
+                    self.emit(OpCode::IndexGet);
+
+                    match elem_pat {
+                        Pattern::Literal(val) => {
+                            self.emit(OpCode::Push(val.clone()));
+                            self.emit(OpCode::Equal);
+                        }
+                        Pattern::Range { start, end, inclusive } => {
+                            let depth = self.current_state().scope_depth;
+                            let elem_slot = self.current_state().locals.len();
+                            self.current_state().locals.push(Local {
+                                name: format!("<range_elem_{}>", elem_slot),
+                                depth,
+                            });
+                            self.emit(OpCode::LoadLocal(elem_slot));
+                            self.emit(OpCode::Push(Value::Int(*start)));
+                            self.emit(OpCode::GreaterEqual);
+
+                            self.emit(OpCode::LoadLocal(elem_slot));
+                            self.emit(OpCode::Push(Value::Int(*end)));
+                            if *inclusive {
+                                self.emit(OpCode::LessEqual);
+                            } else {
+                                self.emit(OpCode::Less);
+                            }
+                            self.emit(OpCode::And);
+                            self.current_state().locals.pop();
+                        }
+                        _ => {
+                            self.emit(OpCode::Pop);
+                            self.emit(OpCode::Push(Value::Bool(true)));
+                        }
+                    }
+
+                    if idx > 0 {
+                        self.emit(OpCode::And);
+                    }
+                }
+            }
+            Pattern::Or(alternatives) => {
+                if alternatives.is_empty() {
+                    self.emit(OpCode::Push(Value::Bool(false)));
+                    return;
+                }
+                self.compile_pattern_check(&alternatives[0], subj_slot);
+                for alt in &alternatives[1..] {
+                    self.compile_pattern_check(alt, subj_slot);
+                    self.emit(OpCode::Or);
+                }
+            }
         }
     }
 }
