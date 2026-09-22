@@ -2,4 +2,5 @@
 .git/**
 *.vsix
 .DS_Store
+whalli_avatar.png
 node_modules/@vscode/vsce/**

@@ -1,9 +1,14 @@
 {
   "name": "whalli-lang",
   "displayName": "Whalli Language Support",
-  "description": "Rich language support for the Whalli programming language, including LSP, diagnostics, autocomplete, hover docs, and formatting.",
-  "version": "0.1.0",
+  "description": "Rich language support for the Whalli programming language, including LSP, diagnostics, autocomplete, hover docs, run button, and formatting.",
+  "version": "0.1.2",
   "publisher": "kepr",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -18,13 +23,15 @@
   "keywords": [
     "whalli",
     "lsp",
-    "language-server"
+    "language-server",
+    "runner"
   ],
   "engines": {
     "vscode": "^1.75.0"
   },
   "activationEvents": [
-    "onLanguage:whalli"
+    "onLanguage:whalli",
+    "onCommand:whalli.runFile"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -38,6 +45,10 @@
         "extensions": [
           ".wh"
         ],
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        },
         "configuration": "./language-configuration.json"
       }
     ],
@@ -48,6 +59,36 @@
         "path": "./syntaxes/whalli.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "whalli.runFile",
+        "title": "Run Whalli File",
+        "icon": "$(play)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "whalli.runFile",
+        "key": "ctrl+f5",
+        "when": "editorTextFocus && editorLangId == whalli"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "whalli.runFile",
+          "when": "resourceExtname == .wh || editorLangId == whalli",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "whalli.runFile",
+          "when": "resourceExtname == .wh || editorLangId == whalli",
+          "group": "run"
+        }
+      ]
+    },
     "configuration": {
       "title": "Whalli",
       "properties": {
@@ -55,6 +96,11 @@
           "type": "string",
           "default": "",
           "description": "Custom path to the whalli-lsp executable binary. If empty, the extension looks for whalli-lsp in workspace target/release or in system PATH."
+        },
+        "whalli.interpreterPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the whalli interpreter binary. If empty, the extension looks for whalli in workspace target/release, target/debug or in system PATH."
         }
       }
     }
