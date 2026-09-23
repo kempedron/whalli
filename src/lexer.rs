@@ -290,7 +290,9 @@ impl Lexer {
                                 if self.pos < self.chars.len() {
                                     match self.chars[self.pos] {
                                         'n' => s.push('\n'),
+                                        'r' => s.push('\r'),
                                         't' => s.push('\t'),
+                                        '\\' => s.push('\\'),
                                         '"' => s.push('"'),
                                         other => {
                                             s.push('\\');
@@ -321,7 +323,9 @@ impl Lexer {
                             if self.pos < self.chars.len() {
                                 match self.chars[self.pos] {
                                     'n' => s.push('\n'),
+                                    'r' => s.push('\r'),
                                     't' => s.push('\t'),
+                                    '\\' => s.push('\\'),
                                     '"' => s.push('"'),
                                     other => {
                                         s.push('\\');

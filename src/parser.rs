@@ -287,11 +287,17 @@ impl Parser {
             let expr = self.parse_primary()?;
             self.consume_stmt_end()?;
 
-            if let Expr::Call(callee, args) = expr {
-                return Ok(Stmt::Spawn(callee, args));
-            } else {
-                return Err(self.error("Expected function call after 'wo'"));
-            }
+            return match expr {
+                Expr::Call(callee, args) => Ok(Stmt::Spawn(callee, args)),
+                Expr::MethodCall(obj, method, args) => {
+                    let callee = Box::new(Expr::Index(
+                        obj,
+                        Box::new(Expr::Literal(Value::Str(std::sync::Arc::new(method)))),
+                    ));
+                    Ok(Stmt::Spawn(callee, args))
+                }
+                _ => Err(self.error("Expected function or method call after 'wo'")),
+            };
         }
 
         if self.match_token(TokenKind::Defer) {
@@ -513,10 +519,16 @@ impl Parser {
 
         if self.match_token(TokenKind::Wo) {
             let expr = self.parse_primary()?;
-            if let Expr::Call(callee, args) = expr {
-                return Ok(Expr::Spawn(callee, args));
-            } else {
-                return Err(self.error("Expected function call after 'wo'"));
+            match expr {
+                Expr::Call(callee, args) => return Ok(Expr::Spawn(callee, args)),
+                Expr::MethodCall(obj, method, args) => {
+                    let callee = Box::new(Expr::Index(
+                        obj,
+                        Box::new(Expr::Literal(Value::Str(std::sync::Arc::new(method)))),
+                    ));
+                    return Ok(Expr::Spawn(callee, args));
+                }
+                _ => return Err(self.error("Expected function or method call after 'wo'")),
             }
         }
 

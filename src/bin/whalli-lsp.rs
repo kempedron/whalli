@@ -164,7 +164,7 @@ impl Backend {
                     if tokens[i].kind == TokenKind::Import && i + 1 < tokens.len() {
                         match &tokens[i + 1].kind {
                             TokenKind::Identifier(mod_name) => {
-                                if !["net", "fs", "time", "math", "json", "os", "sync"].contains(&mod_name.as_str()) {
+                                if !["net", "fs", "time", "math", "json", "os", "sync", "requests", "http"].contains(&mod_name.as_str()) {
                                     let line_idx = tokens[i].line.saturating_sub(1);
                                     let line_str = lines.get(line_idx).unwrap_or(&"");
                                     let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
@@ -182,7 +182,7 @@ impl Backend {
                                         severity: Some(DiagnosticSeverity::WARNING),
                                         source: Some("whalli".to_string()),
                                         message: format!(
-                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync (or use import \"./path.wh\")",
+                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync, requests, http (or use import \"./path.wh\")",
                                             mod_name
                                         ),
                                         ..Default::default()
@@ -623,7 +623,7 @@ impl LanguageServer for Backend {
 
         // Do not allow renaming builtins or keywords
         let reserved = [
-            "net", "fs", "time", "math", "json", "os", "println", "print", "range", "new", "len",
+            "net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "println", "print", "range", "new", "len",
             "push", "pop", "keys", "remove", "int", "float", "str", "bool", "let",
             "func", "return", "if", "else", "while", "for", "in", "break", "continue",
             "import", "struct", "impl", "is", "interface", "wo", "defer", "true", "false", "nil",
@@ -816,6 +816,25 @@ impl LanguageServer for Backend {
                     items.push(create_snippet("WaitGroup", "func sync.WaitGroup() -> WaitGroup\nCreates a synchronization wait group", "WaitGroup()"));
                     items.push(create_snippet("Mutex", "func sync.Mutex() -> Mutex\nCreates a mutual exclusion lock", "Mutex()"));
                 }
+                "requests" => {
+                    items.push(create_snippet("get", "func requests.get(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS GET request", "get(${1:\"url\"})"));
+                    items.push(create_snippet("post", "func requests.post(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS POST request", "post(${1:\"url\"}, {\"json\": ${2:body}})"));
+                    items.push(create_snippet("put", "func requests.put(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS PUT request", "put(${1:\"url\"}, {\"json\": ${2:body}})"));
+                    items.push(create_snippet("delete", "func requests.delete(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS DELETE request", "delete(${1:\"url\"})"));
+                    items.push(create_snippet("patch", "func requests.patch(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS PATCH request", "patch(${1:\"url\"}, {\"json\": ${2:body}})"));
+                    items.push(create_snippet("head", "func requests.head(url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS HEAD request", "head(${1:\"url\"})"));
+                    items.push(create_snippet("request", "func requests.request(method: str, url: str, options: map = nil) -> Response\nSends an HTTP/HTTPS request with specified method", "request(${1:\"GET\"}, ${2:\"url\"})"));
+                }
+                "http" => {
+                    items.push(create_snippet("listen_and_serve", "func http.listen_and_serve(addr: str, handler) -> (ok: bool, err: str | nil)\nStarts a high-performance HTTP server", "listen_and_serve(${1:\":8080\"}, ${2:router})"));
+                    items.push(create_snippet("router", "func http.router() -> Router\nCreates a new RESTful HTTP request router", "router()"));
+                    items.push(create_snippet("parse_request", "func http.parse_request(raw_str: str) -> (req: map, err: str | nil)\nParses raw HTTP/1.1 request text", "parse_request(${1:raw_str})"));
+                    items.push(create_snippet("response", "func http.response(status_code: int, headers: map = nil, body: str = \"\") -> str\nBuilds formatted HTTP response", "response(${1:200}, ${2:nil}, ${3:\"OK\"})"));
+                    items.push(create_snippet("json_response", "func http.json_response(status_code: int, data: any, headers: map = nil) -> str\nBuilds JSON HTTP response", "json_response(${1:200}, ${2:data})"));
+                    items.push(create_snippet("text_response", "func http.text_response(status_code: int, text: str, headers: map = nil) -> str\nBuilds plain text HTTP response", "text_response(${1:200}, ${2:\"OK\"})"));
+                    items.push(create_snippet("html_response", "func http.html_response(status_code: int, html: str, headers: map = nil) -> str\nBuilds HTML HTTP response", "html_response(${1:200}, ${2:\"<html></html>\"})"));
+                    items.push(create_snippet("status_text", "func http.status_text(code: int) -> str\nReturns standard HTTP status text", "status_text(${1:200})"));
+                }
                 _ => {
                     // Check if caller matches a known struct with methods
                     for imp in &index.impls {
@@ -907,7 +926,7 @@ impl LanguageServer for Backend {
             }
 
             // Modules
-            for m in ["net", "fs", "time", "math", "json", "os", "sync"] {
+            for m in ["net", "fs", "time", "math", "json", "os", "sync", "requests", "http"] {
                 items.push(CompletionItem {
                     label: m.to_string(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -1612,6 +1631,24 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             ("sync", "Mutex") => {
                 "```whalli\nfunc sync.Mutex() -> Mutex\n```\nCreates a mutual exclusion lock for synchronizing shared state across concurrent woroutines.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nlet mu = sync.Mutex()\nmu.lock()\n// critical section\nmu.unlock()\n```"
             }
+            ("requests", "get") => {
+                "```whalli\nfunc requests.get(url: str, options: map = nil) -> Response\n```\nSends an HTTP/HTTPS GET request in the style of Python requests.\n\n---\n\n### Examples\n```whalli\nimport requests\n\nlet resp = requests.get(\"https://httpbin.org/get\")\nif resp.ok {\n    println(\"Status:\", resp.status_code)\n    let data = resp.json()\n}\n```"
+            }
+            ("requests", "post") => {
+                "```whalli\nfunc requests.post(url: str, options: map = nil) -> Response\n```\nSends an HTTP/HTTPS POST request with optional JSON, data, or headers.\n\n---\n\n### Examples\n```whalli\nimport requests\n\nlet resp = requests.post(\"https://httpbin.org/post\", {\n    \"json\": {\"name\": \"Alice\", \"role\": \"admin\"}\n})\n```"
+            }
+            ("http", "listen_and_serve") => {
+                "```whalli\nfunc http.listen_and_serve(addr: str, handler) -> (ok: bool, err: str | nil)\n```\nStarts an ultra-fast non-blocking HTTP server on `addr` (e.g. `\":8080\"` or `\"127.0.0.1:8080\"`), spawning concurrent woroutines per connection.\n\n---\n\n### Examples\n```whalli\nimport http\n\nlet router = http.router()\nrouter.get(\"/hello\", func(req) {\n    return http.text_response(200, \"Hello World!\")\n})\n\nhttp.listen_and_serve(\":8080\", router)\n```"
+            }
+            ("http", "router") => {
+                "```whalli\nfunc http.router() -> Router\n```\nCreates a high-performance RESTful router supporting `.get()`, `.post()`, `.put()`, `.delete()`, `.patch()`, and path parameters like `/:id`."
+            }
+            ("http", "json_response") => {
+                "```whalli\nfunc http.json_response(status_code: int, data: any, headers: map = nil) -> str\n```\nFormats an HTTP/1.1 response with `Content-Type: application/json` and automatically serialized JSON body."
+            }
+            ("http", "text_response") => {
+                "```whalli\nfunc http.text_response(status_code: int, text: str, headers: map = nil) -> str\n```\nFormats an HTTP/1.1 response with `Content-Type: text/plain; charset=utf-8`."
+            }
             (_, "close") => {
                 "```whalli\nmethod chan.close()\n```\nCloses the channel. Subsequent writes will fail, and readers will receive remaining buffered elements followed by `nil`."
             }
@@ -1801,6 +1838,12 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "default" => "### Keyword `default`\nFallback case in `select` statement executed immediately if no communication channels are ready.".to_string(),
             "sync" => {
                 "### Module `sync`\nConcurrency and synchronization primitives.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nlet wg = sync.WaitGroup()\nwg.add(1)\n// ...\nwg.done()\nwg.wait()\n\nlet mu = sync.Mutex()\nmu.lock()\n// critical section\nmu.unlock()\n```\n\n#### Members:\n- `WaitGroup() -> WaitGroup`: Synchronization counter\n- `Mutex() -> Mutex`: Mutual exclusion lock".to_string()
+            }
+            "requests" => {
+                "### Module `requests`\nHigh-level HTTP/HTTPS client library in the style of Python requests.\n\n---\n\n### Examples\n```whalli\nimport requests\n\nlet resp = requests.get(\"https://httpbin.org/get\")\nif resp.ok {\n    println(\"Status:\", resp.status_code)\n    let json_data = resp.json()\n}\n```\n\n#### Members:\n- `get(url, options = nil) -> Response`: Send GET request\n- `post(url, options = nil) -> Response`: Send POST request\n- `put(url, options = nil) -> Response`: Send PUT request\n- `delete(url, options = nil) -> Response`: Send DELETE request\n- `patch(url, options = nil) -> Response`: Send PATCH request\n- `head(url, options = nil) -> Response`: Send HEAD request\n- `request(method, url, options = nil) -> Response`: Send request with custom method".to_string()
+            }
+            "http" => {
+                "### Module `http`\nHigh-performance server, backend, and RESTful API framework in the style of Go net/http.\n\n---\n\n### Examples\n```whalli\nimport http\n\nlet router = http.router()\nrouter.get(\"/api/hello\", func(req) {\n    return http.json_response(200, {\"message\": \"Hello from Whalli!\"})\n})\n\nhttp.listen_and_serve(\":8080\", router)\n```\n\n#### Members:\n- `listen_and_serve(addr, handler)`: Starts non-blocking HTTP server on `addr` (e.g. `\":8080\"`)\n- `router()`: Creates RESTful router supporting `.get()`, `.post()`, `.put()`, `.delete()`, `.patch()`\n- `parse_request(raw_str)`: Parses HTTP request into `req` map with `.json()` method\n- `response(code, headers, body)`: Formats HTTP response\n- `json_response(code, data, headers)`: Formats JSON HTTP response\n- `text_response(code, text, headers)`: Formats text HTTP response\n- `html_response(code, html, headers)`: Formats HTML HTTP response\n- `status_text(code)`: Returns standard status text string".to_string()
             }
             _ => {
                 if let Some(f) = index.functions.iter().find(|f| f.name == word) {

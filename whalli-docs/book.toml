@@ -1,0 +1,17 @@
+[book]
+title = "Whalli Language Reference"
+authors = ["Whalli Contributors"]
+language = "en"
+src = "src"
+multilingual = false
+
+[build]
+build-dir = "book"
+
+[output.html]
+additional-css = []
+git-repository-url = "https://github.com/kempedron/whalli"
+edit-url-template = "https://github.com/kempedron/whalli/edit/main/whalli-docs/src/{path}"
+search.limit-results = 20
+
+[output.linkcheck]

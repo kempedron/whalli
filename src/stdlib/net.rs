@@ -9,6 +9,122 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+pub(crate) fn net_accept(args: Vec<Value>, vm: &mut VM) -> NativeResult {
+    if let Some(Value::Int(server_id)) = args.first() {
+        let server_id = *server_id as usize;
+
+        let listeners = vm.net.listeners.read();
+        let listener = match listeners.get(&server_id) {
+            Some(l) => l,
+            None => return NativeResult::Return(Value::Nil),
+        };
+
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                drop(listeners);
+                let token_id = vm.net.next_token.fetch_add(1, Ordering::Relaxed);
+                let token = Token(token_id);
+
+                let poller = vm.net.poll.lock();
+                poller
+                    .registry()
+                    .register(&mut stream, token, Interest::READABLE | Interest::WRITABLE)
+                    .unwrap();
+                drop(poller);
+
+                vm.net.streams.write().insert(token_id, stream);
+                return NativeResult::Return(Value::Int(token_id as i64));
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return NativeResult::SuspendIO(Token(server_id));
+            }
+            Err(_) => {
+                return NativeResult::Return(Value::Nil);
+            }
+        }
+    }
+    NativeResult::Return(Value::Nil)
+}
+
+pub(crate) fn net_write_all(args: Vec<Value>, vm: &mut VM) -> NativeResult {
+    if args.len() >= 2 {
+        if let (Value::Int(client_id), Value::Str(data)) = (&args[0], &args[1]) {
+            let client_id = *client_id as usize;
+
+            let mut streams = vm.net.streams.write();
+            let stream = match streams.get_mut(&client_id) {
+                Some(s) => s,
+                None => {
+                    let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Invalid client_id".to_string()))]));
+                    return NativeResult::Return(res);
+                }
+            };
+
+            let bytes = data.as_bytes();
+            let mut written = 0;
+            while written < bytes.len() {
+                match stream.write(&bytes[written..]) {
+                    Ok(0) => {
+                        streams.remove(&client_id);
+                        let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Connection closed by peer".to_string()))]));
+                        return NativeResult::Return(res);
+                    }
+                    Ok(n) => written += n,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        return NativeResult::SuspendIO(Token(client_id));
+                    }
+                    Err(e) => {
+                        streams.remove(&client_id);
+                        let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new(e.to_string()))]));
+                        return NativeResult::Return(res);
+                    }
+                }
+            }
+
+            let res = Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil]));
+            return NativeResult::Return(res);
+        }
+    }
+    let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Expected client_id and data string".to_string()))]));
+    NativeResult::Return(res)
+}
+
+pub(crate) fn net_set_nodelay(args: Vec<Value>, vm: &mut VM) -> NativeResult {
+    if args.len() >= 2 {
+        if let (Value::Int(client_id), Value::Bool(enabled)) = (&args[0], &args[1]) {
+            let client_id = *client_id as usize;
+            let streams = vm.net.streams.read();
+            if let Some(stream) = streams.get(&client_id) {
+                let res = stream.set_nodelay(*enabled).is_ok();
+                return NativeResult::Return(Value::Bool(res));
+            }
+        }
+    }
+    NativeResult::Return(Value::Bool(false))
+}
+
+pub(crate) fn net_close(args: Vec<Value>, vm: &mut VM) -> NativeResult {
+    if let Some(Value::Int(id)) = args.first() {
+        let id = *id as usize;
+        let mut closed = false;
+        if let Some(mut stream) = vm.net.streams.write().remove(&id) {
+            let poller = vm.net.poll.lock();
+            let _ = poller.registry().deregister(&mut stream);
+            closed = true;
+        }
+        if let Some(mut listener) = vm.net.listeners.write().remove(&id) {
+            let poller = vm.net.poll.lock();
+            let _ = poller.registry().deregister(&mut listener);
+            closed = true;
+        }
+        if closed {
+            vm.net.closed_tokens.lock().push(id);
+            return NativeResult::Return(Value::Bool(true));
+        }
+    }
+    NativeResult::Return(Value::Bool(false))
+}
+
 pub fn register(vm: &mut VM) -> Value {
     let mut net_module = HashMap::new();
 
@@ -107,45 +223,7 @@ pub fn register(vm: &mut VM) -> Value {
     );
 
     // net.accept(server_id: int) -> client_id: int | nil
-    net_module.insert(
-        "accept".to_string(),
-        Value::Native(|args, vm| {
-            if let Some(Value::Int(server_id)) = args.first() {
-                let server_id = *server_id as usize;
-
-                let listeners = vm.net.listeners.read();
-                let listener = match listeners.get(&server_id) {
-                    Some(l) => l,
-                    None => return NativeResult::Return(Value::Nil),
-                };
-
-                match listener.accept() {
-                    Ok((mut stream, _addr)) => {
-                        drop(listeners);
-                        let token_id = vm.net.next_token.fetch_add(1, Ordering::Relaxed);
-                        let token = Token(token_id);
-
-                        let poller = vm.net.poll.lock();
-                        poller
-                            .registry()
-                            .register(&mut stream, token, Interest::READABLE | Interest::WRITABLE)
-                            .unwrap();
-                        drop(poller);
-
-                        vm.net.streams.write().insert(token_id, stream);
-                        return NativeResult::Return(Value::Int(token_id as i64));
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        return NativeResult::SuspendIO(Token(server_id));
-                    }
-                    Err(_) => {
-                        return NativeResult::Return(Value::Nil);
-                    }
-                }
-            }
-            NativeResult::Return(Value::Nil)
-        }),
-    );
+    net_module.insert("accept".to_string(), Value::Native(net_accept));
 
     // net.read(client_id: int, max_bytes: int = 4096) -> (data: str | nil, err: str | nil)
     net_module.insert(
@@ -309,51 +387,7 @@ pub fn register(vm: &mut VM) -> Value {
     );
 
     // net.write_all(client_id, "string") -> (ok: bool, err: str | nil)
-    net_module.insert(
-        "write_all".to_string(),
-        Value::Native(|args, vm| {
-            if args.len() >= 2 {
-                if let (Value::Int(client_id), Value::Str(data)) = (&args[0], &args[1]) {
-                    let client_id = *client_id as usize;
-
-                    let mut streams = vm.net.streams.write();
-                    let stream = match streams.get_mut(&client_id) {
-                        Some(s) => s,
-                        None => {
-                            let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Invalid client_id".to_string()))]));
-                            return NativeResult::Return(res);
-                        }
-                    };
-
-                    let bytes = data.as_bytes();
-                    let mut written = 0;
-                    while written < bytes.len() {
-                        match stream.write(&bytes[written..]) {
-                            Ok(0) => {
-                                streams.remove(&client_id);
-                                let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Connection closed by peer".to_string()))]));
-                                return NativeResult::Return(res);
-                            }
-                            Ok(n) => written += n,
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                return NativeResult::SuspendIO(Token(client_id));
-                            }
-                            Err(e) => {
-                                streams.remove(&client_id);
-                                let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new(e.to_string()))]));
-                                return NativeResult::Return(res);
-                            }
-                        }
-                    }
-
-                    let res = Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil]));
-                    return NativeResult::Return(res);
-                }
-            }
-            let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Expected client_id and data string".to_string()))]));
-            NativeResult::Return(res)
-        }),
-    );
+    net_module.insert("write_all".to_string(), Value::Native(net_write_all));
 
     // net.peer_addr(client_id) -> str | nil
     net_module.insert(
@@ -398,43 +432,10 @@ pub fn register(vm: &mut VM) -> Value {
     );
 
     // net.set_nodelay(client_id, enabled: bool) -> bool
-    net_module.insert(
-        "set_nodelay".to_string(),
-        Value::Native(|args, vm| {
-            if args.len() >= 2 {
-                if let (Value::Int(client_id), Value::Bool(enabled)) = (&args[0], &args[1]) {
-                    let client_id = *client_id as usize;
-                    let streams = vm.net.streams.read();
-                    if let Some(stream) = streams.get(&client_id) {
-                        let res = stream.set_nodelay(*enabled).is_ok();
-                        return NativeResult::Return(Value::Bool(res));
-                    }
-                }
-            }
-            NativeResult::Return(Value::Bool(false))
-        }),
-    );
+    net_module.insert("set_nodelay".to_string(), Value::Native(net_set_nodelay));
 
     // net.close(id: int) -> bool
-    net_module.insert(
-        "close".to_string(),
-        Value::Native(|args, vm| {
-            if let Some(Value::Int(id)) = args.first() {
-                let id = *id as usize;
-                if let Some(mut stream) = vm.net.streams.write().remove(&id) {
-                    let poller = vm.net.poll.lock();
-                    let _ = poller.registry().deregister(&mut stream);
-                    return NativeResult::Return(Value::Bool(true));
-                }
-                if let Some(mut listener) = vm.net.listeners.write().remove(&id) {
-                    let poller = vm.net.poll.lock();
-                    let _ = poller.registry().deregister(&mut listener);
-                    return NativeResult::Return(Value::Bool(true));
-                }
-            }
-            NativeResult::Return(Value::Bool(false))
-        }),
-    );
+    net_module.insert("close".to_string(), Value::Native(net_close));
 
     let id = vm.heap.alloc(Obj::Map(net_module));
     Value::ObjRef(id)

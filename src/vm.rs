@@ -71,6 +71,7 @@ pub struct NetworkState {
     pub listeners: RwLock<HashMap<usize, TcpListener>>,
     pub streams: RwLock<HashMap<usize, TcpStream>>,
     pub next_token: AtomicUsize,
+    pub closed_tokens: Mutex<Vec<usize>>,
 }
 
 struct SharedRuntime {
@@ -309,6 +310,7 @@ impl VM {
             listeners: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
             next_token: AtomicUsize::new(1),
+            closed_tokens: Mutex::new(Vec::new()),
         });
 
         let mut vm = VM {
@@ -452,6 +454,36 @@ impl VM {
                 {
                     let mut poller = io_shared.net.poll.lock();
                     let _ = poller.poll(&mut events, Some(next_timeout));
+                }
+
+                // Check and wake any tasks whose sockets/listeners were closed
+                {
+                    let mut closed = io_shared.net.closed_tokens.lock();
+                    if !closed.is_empty() {
+                        let mut io_tasks = io_shared.waiting_io_tasks.lock();
+                        let mut woken = Vec::new();
+                        while let Some(tok_id) = closed.pop() {
+                            let tok = Token(tok_id);
+                            let mut i = 0;
+                            while i < io_tasks.len() {
+                                if let TaskState::WaitingIO(wait_tok) = io_tasks[i].state {
+                                    if wait_tok == tok {
+                                        let mut t = io_tasks.remove(i);
+                                        t.state = TaskState::Runnable;
+                                        woken.push(t);
+                                        continue;
+                                    }
+                                }
+                                i += 1;
+                            }
+                        }
+                        if !woken.is_empty() {
+                            for t in woken {
+                                io_shared.injector.push(t);
+                            }
+                            io_shared.condvar.notify_all();
+                        }
+                    }
                 }
 
                 if !events.is_empty() {

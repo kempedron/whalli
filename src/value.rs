@@ -154,6 +154,13 @@ impl Value {
                         _ => Err("'split' expects a string delimiter".to_string()),
                     }
                 }
+                "json" => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s.as_str()) {
+                        Ok(crate::stdlib::json::json_to_value(parsed, heap))
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                }
                 _ => Err(format!("Method '{}' not found on string", method_name)),
             },
             Value::Tuple(elements) => match method_name {
@@ -303,6 +310,82 @@ impl Value {
                             let new_id = heap.alloc(Obj::List(keys));
                             Ok(Value::ObjRef(new_id))
                         }
+                        "json" => {
+                            let text_str = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    if let Some(Value::Str(s)) = map.get("text").or_else(|| map.get("body")) {
+                                        Some((**s).clone())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })?;
+
+                            if let Some(text) = text_str {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    Ok(crate::stdlib::json::json_to_value(parsed, heap))
+                                } else {
+                                    Ok(Value::Nil)
+                                }
+                            } else {
+                                Ok(Value::Nil)
+                            }
+                        }
+                        "get" => {
+                            if args.len() == 1 {
+                                if let Value::Str(key) = &args[0] {
+                                    heap.with_read(*id, |obj| {
+                                        if let Obj::Map(map) = obj {
+                                            Ok(map.get(&**key).cloned().unwrap_or(Value::Nil))
+                                        } else {
+                                            unreachable!()
+                                        }
+                                    })?
+                                } else {
+                                    Err("Map key must be string".to_string())
+                                }
+                            } else if args.len() >= 2 {
+                                register_router_route(*id, "GET", &args[0], &args[1], heap)
+                            } else {
+                                Err("'get' expects 1 argument (key: str) or 2 arguments (path: str, handler: func)".to_string())
+                            }
+                        }
+                        "post" => {
+                            if args.len() < 2 { return Err("'post' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "POST", &args[0], &args[1], heap)
+                        }
+                        "put" => {
+                            if args.len() < 2 { return Err("'put' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "PUT", &args[0], &args[1], heap)
+                        }
+                        "delete" => {
+                            if args.len() < 2 { return Err("'delete' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "DELETE", &args[0], &args[1], heap)
+                        }
+                        "patch" => {
+                            if args.len() < 2 { return Err("'patch' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "PATCH", &args[0], &args[1], heap)
+                        }
+                        "head" => {
+                            if args.len() < 2 { return Err("'head' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "HEAD", &args[0], &args[1], heap)
+                        }
+                        "options" => {
+                            if args.len() < 2 { return Err("'options' expects 2 arguments: (path: str, handler: func)".to_string()); }
+                            register_router_route(*id, "OPTIONS", &args[0], &args[1], heap)
+                        }
+                        "handle" => {
+                            if args.len() < 3 {
+                                return Err("'handle' expects 3 arguments: (method: str, path: str, handler: func)".to_string());
+                            }
+                            let m = match &args[0] {
+                                Value::Str(s) => s.as_str().to_uppercase(),
+                                _ => return Err("HTTP method must be a string".to_string()),
+                            };
+                            register_router_route(*id, &m, &args[1], &args[2], heap)
+                        }
                         _ => Err(format!("Method '{}' not found on map", method_name)),
                     },
                     _ => Err(format!(
@@ -314,7 +397,61 @@ impl Value {
             _ => Err(format!("Method '{}' not found on this type", method_name)),
         }
     }
+}
 
+fn register_router_route(
+    router_id: usize,
+    method: &str,
+    path_val: &Value,
+    handler_val: &Value,
+    heap: &Heap,
+) -> Result<Value, String> {
+    let path = match path_val {
+        Value::Str(s) => s.as_str().to_string(),
+        _ => return Err("Route path must be a string".to_string()),
+    };
+
+    heap.with_write(router_id, |obj| {
+        if let Obj::Map(map) = obj {
+            let routes_val = map.entry("routes".to_string()).or_insert_with(|| {
+                let r_id = heap.alloc(Obj::Map(std::collections::HashMap::new()));
+                Value::ObjRef(r_id)
+            });
+            let routes_id = match routes_val {
+                Value::ObjRef(id) => *id,
+                _ => return Err("Invalid router routes".to_string()),
+            };
+
+            let method_routes_id = heap.with_write(routes_id, |r_obj| {
+                if let Obj::Map(r_map) = r_obj {
+                    let m_val = r_map.entry(method.to_string()).or_insert_with(|| {
+                        let m_id = heap.alloc(Obj::Map(std::collections::HashMap::new()));
+                        Value::ObjRef(m_id)
+                    });
+                    match m_val {
+                        Value::ObjRef(id) => Ok(*id),
+                        _ => Err("Invalid method routes".to_string()),
+                    }
+                } else {
+                    Err("Invalid routes object".to_string())
+                }
+            })??;
+
+            heap.with_write(method_routes_id, |m_obj| {
+                if let Obj::Map(m_map) = m_obj {
+                    m_map.insert(path, handler_val.clone());
+                    Ok(Value::Nil)
+                } else {
+                    Err("Invalid method routes map".to_string())
+                }
+            })?
+        } else {
+            Err("Expected map object".to_string())
+        }
+    })?
+}
+
+impl Value {
     pub fn stringify(&self, heap: &crate::heap::Heap) -> String {
         match self {
             Value::Nil => "nil".to_string(),

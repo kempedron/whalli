@@ -4,7 +4,7 @@ use crate::vm::VM;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
+pub(crate) fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
     match val {
         Value::Nil => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
@@ -53,7 +53,7 @@ fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
     }
 }
 
-fn json_to_value(jv: serde_json::Value, heap: &mut Heap) -> Value {
+pub(crate) fn json_to_value(jv: serde_json::Value, heap: &Heap) -> Value {
     match jv {
         serde_json::Value::Null => Value::Nil,
         serde_json::Value::Bool(b) => Value::Bool(b),
@@ -105,7 +105,7 @@ pub fn register(vm: &mut VM) -> Value {
             if let Some(Value::Str(json_str)) = args.first() {
                 match serde_json::from_str::<serde_json::Value>(json_str.as_str()) {
                     Ok(parsed) => {
-                        let val = json_to_value(parsed, &mut vm.heap);
+                        let val = json_to_value(parsed, &vm.heap);
                         let res = Value::Tuple(Arc::new(vec![val, Value::Nil]));
                         NativeResult::Return(res)
                     }
