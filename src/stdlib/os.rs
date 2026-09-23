@@ -2,7 +2,7 @@ use crate::heap::Obj;
 use crate::value::{NativeResult, Value};
 use crate::vm::VM;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn register(vm: &mut VM) -> Value {
     let mut os_module = HashMap::new();
@@ -12,7 +12,7 @@ pub fn register(vm: &mut VM) -> Value {
         "args".to_string(),
         Value::Native(|_args, vm| {
             let args_list: Vec<Value> = std::env::args()
-                .map(|a| Value::Str(Rc::new(a)))
+                .map(|a| Value::Str(Arc::new(a)))
                 .collect();
             let id = vm.heap.alloc(Obj::List(args_list));
             NativeResult::Return(Value::ObjRef(id))
@@ -25,7 +25,7 @@ pub fn register(vm: &mut VM) -> Value {
         Value::Native(|args, _vm| {
             if let Some(Value::Str(key)) = args.first() {
                 match std::env::var(key.as_str()) {
-                    Ok(val) => NativeResult::Return(Value::Str(Rc::new(val))),
+                    Ok(val) => NativeResult::Return(Value::Str(Arc::new(val))),
                     Err(_) => NativeResult::Return(Value::Nil),
                 }
             } else {
@@ -40,7 +40,6 @@ pub fn register(vm: &mut VM) -> Value {
         Value::Native(|args, _vm| {
             if args.len() >= 2 {
                 if let (Value::Str(key), Value::Str(val)) = (&args[0], &args[1]) {
-                    // Safe set_var
                     unsafe {
                         std::env::set_var(key.as_str(), val.as_str());
                     }
@@ -58,7 +57,7 @@ pub fn register(vm: &mut VM) -> Value {
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string());
-            NativeResult::Return(Value::Str(Rc::new(cwd)))
+            NativeResult::Return(Value::Str(Arc::new(cwd)))
         }),
     );
 

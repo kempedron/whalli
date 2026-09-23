@@ -1,5 +1,5 @@
 use mio::Token;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::{
     heap::{Heap, Obj},
@@ -28,11 +28,12 @@ pub enum Value {
     Bool(bool),
     Int(i64),
     Float(f64),
-    Str(Rc<String>),
-    Function(Rc<FunctionObj>),
+    Str(Arc<String>),
+    Type(String),
+    Function(Arc<FunctionObj>),
     Native(fn(Vec<Value>, &mut crate::vm::VM) -> NativeResult),
     ObjRef(usize),
-    Tuple(Rc<Vec<Value>>),
+    Tuple(Arc<Vec<Value>>),
     Range(i64, i64, i64),
 }
 
@@ -44,7 +45,8 @@ impl PartialEq for Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
-            (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(a, b),
+            (Value::Type(a), Value::Type(b)) => a == b,
+            (Value::Function(a), Value::Function(b)) => Arc::ptr_eq(a, b),
             (Value::ObjRef(a), Value::ObjRef(b)) => a == b,
             (Value::Native(a), Value::Native(b)) => (*a as usize) == (*b as usize),
             (Value::Range(s1, e1, st1), Value::Range(s2, e2, st2)) => s1 == s2 && e1 == e2 && st1 == st2,
@@ -61,6 +63,7 @@ impl std::fmt::Display for Value {
             Value::Float(n) => write!(f, "{}", n),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Str(s) => write!(f, "{}", s),
+            Value::Type(t) => write!(f, "<type {}>", t),
             Value::Function(func) => write!(f, "<func {}>", func.name),
             Value::Native(_) => write!(f, "<native>"),
             Value::ObjRef(id) => write!(f, "<object #{}>", id),
@@ -90,14 +93,14 @@ impl Value {
         &self,
         method_name: &str,
         args: Vec<Value>,
-        heap: &mut Heap,
+        heap: &Heap,
     ) -> Result<Value, String> {
         match self {
             Value::Str(s) => match method_name {
                 "len" => Ok(Value::Int(s.len() as i64)),
-                "trim" => Ok(Value::Str(Rc::new(s.trim().to_string()))),
-                "to_lower" => Ok(Value::Str(Rc::new(s.to_lowercase()))),
-                "to_upper" => Ok(Value::Str(Rc::new(s.to_uppercase()))),
+                "trim" => Ok(Value::Str(Arc::new(s.trim().to_string()))),
+                "to_lower" => Ok(Value::Str(Arc::new(s.to_lowercase()))),
+                "to_upper" => Ok(Value::Str(Arc::new(s.to_uppercase()))),
                 "contains" => {
                     if args.len() != 1 {
                         return Err("'contains' expects 1 argument (substring)".to_string());
@@ -130,7 +133,7 @@ impl Value {
                         return Err("'replace' expects 2 arguments (from, to)".to_string());
                     }
                     if let (Value::Str(from), Value::Str(to)) = (&args[0], &args[1]) {
-                        Ok(Value::Str(Rc::new(s.replace(from.as_str(), to.as_str()))))
+                        Ok(Value::Str(Arc::new(s.replace(from.as_str(), to.as_str()))))
                     } else {
                         Err("'replace' expects 2 string arguments".to_string())
                     }
@@ -143,7 +146,7 @@ impl Value {
                         Value::Str(delimiter) => {
                             let parts: Vec<Value> = s
                                 .split(delimiter.as_str())
-                                .map(|p| Value::Str(Rc::new(p.to_string())))
+                                .map(|p| Value::Str(Arc::new(p.to_string())))
                                 .collect();
                             let list_id = heap.alloc(Obj::List(parts));
                             Ok(Value::ObjRef(list_id))
@@ -158,20 +161,16 @@ impl Value {
                 "sort" => {
                     let mut sorted = (**elements).clone();
                     sorted.sort_by(|a, b| a.compare(b));
-                    Ok(Value::Tuple(Rc::new(sorted)))
+                    Ok(Value::Tuple(Arc::new(sorted)))
                 }
                 _ => Err(format!("Method '{}' not found on tuple", method_name)),
             },
             Value::ObjRef(id) => {
-                
-                let obj_type = {
-                    let obj = heap.get(*id)?;
-                    match obj {
-                        Obj::List(_) => "list",
-                        Obj::Map(_) => "map",
-                        _ => "other",
-                    }
-                };
+                let obj_type = heap.with_read(*id, |obj| match obj {
+                    Obj::List(_) => "list",
+                    Obj::Map(_) => "map",
+                    _ => "other",
+                })?;
 
                 match obj_type {
                     "list" => match method_name {
@@ -179,60 +178,74 @@ impl Value {
                             if args.len() != 1 {
                                 return Err("'push' expects 1 argument".to_string());
                             }
-                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
-                                list.push(args[0].clone());
-                                Ok(Value::Nil)
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    list.push(args[0].clone());
+                                    Ok(Value::Nil)
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "pop" => {
-                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
-                                Ok(list.pop().unwrap_or(Value::Nil))
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    Ok(list.pop().unwrap_or(Value::Nil))
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "len" => {
-                            if let Ok(Obj::List(list)) = heap.get(*id) {
-                                Ok(Value::Int(list.len() as i64))
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_read(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    Ok(Value::Int(list.len() as i64))
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "sort" => {
-                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
-                                list.sort_by(|a, b| a.compare(b));
-                                Ok(Value::Nil)
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    list.sort_by(|a, b| a.compare(b));
+                                    Ok(Value::Nil)
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "reverse" => {
-                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
-                                list.reverse();
-                                Ok(Value::Nil)
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    list.reverse();
+                                    Ok(Value::Nil)
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "clear" => {
-                            if let Ok(Obj::List(list)) = heap.get_mut(*id) {
-                                list.clear();
-                                Ok(Value::Nil)
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    list.clear();
+                                    Ok(Value::Nil)
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "contains" => {
                             if args.len() != 1 {
                                 return Err("'contains' expects 1 argument".to_string());
                             }
-                            if let Ok(Obj::List(list)) = heap.get(*id) {
-                                Ok(Value::Bool(list.contains(&args[0])))
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_read(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    Ok(Value::Bool(list.contains(&args[0])))
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "join" => {
                             let sep = if args.is_empty() {
@@ -242,45 +255,51 @@ impl Value {
                             } else {
                                 return Err("'join' expects a string separator".to_string());
                             };
-                            if let Ok(Obj::List(list)) = heap.get(*id) {
-                                let parts: Vec<String> = list.iter().map(|item| item.stringify(heap)).collect();
-                                Ok(Value::Str(Rc::new(parts.join(sep))))
-                            } else {
-                                unreachable!()
-                            }
+                            let parts: Vec<String> = heap.with_read(*id, |obj| {
+                                if let Obj::List(list) = obj {
+                                    list.iter().map(|item| item.stringify(heap)).collect()
+                                } else {
+                                    Vec::new()
+                                }
+                            })?;
+                            Ok(Value::Str(Arc::new(parts.join(sep))))
                         }
                         _ => Err(format!("Method '{}' not found on list", method_name)),
                     },
                     "map" => match method_name {
                         "len" => {
-                            if let Ok(Obj::Map(map)) = heap.get(*id) {
-                                Ok(Value::Int(map.len() as i64))
-                            } else {
-                                unreachable!()
-                            }
+                            heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    Ok(Value::Int(map.len() as i64))
+                                } else {
+                                    unreachable!()
+                                }
+                            })?
                         }
                         "remove" => {
                             if args.len() != 1 {
                                 return Err("'remove' expects 1 argument".to_string());
                             }
                             if let Value::Str(key) = &args[0] {
-                                if let Ok(Obj::Map(map)) = heap.get_mut(*id) {
-                                    Ok(map.remove(&**key).unwrap_or(Value::Nil))
-                                } else {
-                                    unreachable!()
-                                }
+                                heap.with_write(*id, |obj| {
+                                    if let Obj::Map(map) = obj {
+                                        Ok(map.remove(&**key).unwrap_or(Value::Nil))
+                                    } else {
+                                        unreachable!()
+                                    }
+                                })?
                             } else {
                                 Err("Map key must be string".to_string())
                             }
                         }
                         "keys" => {
-                            let keys: Vec<Value> = {
-                                if let Ok(Obj::Map(map)) = heap.get(*id) {
-                                    map.keys().map(|k| Value::Str(Rc::new(k.clone()))).collect()
+                            let keys: Vec<Value> = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.keys().map(|k| Value::Str(Arc::new(k.clone()))).collect()
                                 } else {
-                                    unreachable!()
+                                    Vec::new()
                                 }
-                            };
+                            })?;
                             let new_id = heap.alloc(Obj::List(keys));
                             Ok(Value::ObjRef(new_id))
                         }
@@ -303,6 +322,7 @@ impl Value {
             Value::Int(n) => n.to_string(),
             Value::Float(n) => n.to_string(),
             Value::Str(s) => s.to_string(),
+            Value::Type(t) => format!("<type {}>", t),
             Value::Function(func) => format!("<func {}>", func.name),
             Value::Native(_) => "<native>".to_string(),
             Value::Range(s, e, step) => format!("range({}, {}, {})", s, e, step),
@@ -311,39 +331,35 @@ impl Value {
                 format!("({})", items.join(", "))
             }
             Value::ObjRef(id) => {
-                if let Ok(obj) = heap.get(*id) {
-                    match obj {
-                        crate::heap::Obj::List(list) => {
-                            let items: Vec<String> =
-                                list.iter().map(|e| e.stringify(heap)).collect();
-                            format!("[{}]", items.join(", "))
-                        }
-                        crate::heap::Obj::Map(map) => {
-                            let items: Vec<String> = map
-                                .iter()
-                                .map(|(k, v)| format!("'{}': {}", k, v.stringify(heap)))
-                                .collect();
-                            format!("{{{}}}", items.join(", "))
-                        }
-                        crate::heap::Obj::Instance { struct_id, fields } => {
-                            let mut items: Vec<String> = fields
-                                .iter()
-                                .map(|(k, v)| format!("{}: {}", k, v.stringify(heap)))
-                                .collect();
-                            items.sort();
-                            if let Ok(crate::heap::Obj::StructDef { name, .. }) =
-                                heap.get(*struct_id)
-                            {
-                                format!("{} {{{}}}", name, items.join(", "))
-                            } else {
-                                format!("Instance {{{}}}", items.join(", "))
-                            }
-                        }
-                        _ => format!("{}", self),
+                heap.with_read(*id, |obj| match obj {
+                    crate::heap::Obj::List(list) => {
+                        let items: Vec<String> =
+                            list.iter().map(|e| e.stringify(heap)).collect();
+                        format!("[{}]", items.join(", "))
                     }
-                } else {
-                    format!("{}", self)
-                }
+                    crate::heap::Obj::Map(map) => {
+                        let items: Vec<String> = map
+                            .iter()
+                            .map(|(k, v)| format!("'{}': {}", k, v.stringify(heap)))
+                            .collect();
+                        format!("{{{}}}", items.join(", "))
+                    }
+                    crate::heap::Obj::Instance { struct_id, fields } => {
+                        let mut items: Vec<String> = fields
+                            .iter()
+                            .map(|(k, v)| format!("{}: {}", k, v.stringify(heap)))
+                            .collect();
+                        items.sort();
+                        if let Ok(crate::heap::Obj::StructDef { name, .. }) =
+                            heap.get(*struct_id)
+                        {
+                            format!("{} {{{}}}", name, items.join(", "))
+                        } else {
+                            format!("Instance {{{}}}", items.join(", "))
+                        }
+                    }
+                    _ => format!("{}", self),
+                }).unwrap_or_else(|_| format!("{}", self))
             }
         }
     }

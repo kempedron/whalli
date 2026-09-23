@@ -1,7 +1,7 @@
 mod common;
 use common::run_code;
 use whalli::value::Value;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn test_match_literals() {
@@ -22,7 +22,7 @@ fn test_match_literals() {
     "#;
     let vm = run_code(code);
     let res = vm.globals.get("res").expect("res should exist");
-    assert_eq!(res, &Value::Str(Rc::new("OK".to_string())));
+    assert_eq!(res, &Value::Str(Arc::new("OK".to_string())));
 
     let bool_res = vm.globals.get("bool_res").expect("bool_res should exist");
     assert_eq!(bool_res, &Value::Int(1));
@@ -57,13 +57,13 @@ fn test_match_ranges() {
     "#;
     let vm = run_code(code);
     let grade_a = vm.globals.get("grade_a").expect("grade_a should exist");
-    assert_eq!(grade_a, &Value::Str(Rc::new("A".to_string())));
+    assert_eq!(grade_a, &Value::Str(Arc::new("A".to_string())));
 
     let grade_b = vm.globals.get("grade_b").expect("grade_b should exist");
-    assert_eq!(grade_b, &Value::Str(Rc::new("B".to_string())));
+    assert_eq!(grade_b, &Value::Str(Arc::new("B".to_string())));
 
     let grade_f = vm.globals.get("grade_f").expect("grade_f should exist");
-    assert_eq!(grade_f, &Value::Str(Rc::new("F".to_string())));
+    assert_eq!(grade_f, &Value::Str(Arc::new("F".to_string())));
 }
 
 #[test]
@@ -91,9 +91,9 @@ fn test_match_alternatives() {
     }
     "#;
     let vm = run_code(code);
-    assert_eq!(vm.globals.get("res_2").unwrap(), &Value::Str(Rc::new("small".to_string())));
-    assert_eq!(vm.globals.get("res_5").unwrap(), &Value::Str(Rc::new("medium".to_string())));
-    assert_eq!(vm.globals.get("res_99").unwrap(), &Value::Str(Rc::new("large".to_string())));
+    assert_eq!(vm.globals.get("res_2").unwrap(), &Value::Str(Arc::new("small".to_string())));
+    assert_eq!(vm.globals.get("res_5").unwrap(), &Value::Str(Arc::new("medium".to_string())));
+    assert_eq!(vm.globals.get("res_99").unwrap(), &Value::Str(Arc::new("large".to_string())));
 }
 
 #[test]
@@ -112,8 +112,8 @@ fn test_match_tuples_and_variables() {
     }
     "#;
     let vm = run_code(code);
-    assert_eq!(vm.globals.get("res1").unwrap(), &Value::Str(Rc::new("origin".to_string())));
-    assert_eq!(vm.globals.get("res2").unwrap(), &Value::Str(Rc::new("point: 10,20".to_string())));
+    assert_eq!(vm.globals.get("res1").unwrap(), &Value::Str(Arc::new("origin".to_string())));
+    assert_eq!(vm.globals.get("res2").unwrap(), &Value::Str(Arc::new("point: 10,20".to_string())));
 }
 
 #[test]
@@ -132,6 +132,6 @@ fn test_match_guards() {
     }
     "#;
     let vm = run_code(code);
-    assert_eq!(vm.globals.get("label_big").unwrap(), &Value::Str(Rc::new("big".to_string())));
-    assert_eq!(vm.globals.get("label_small").unwrap(), &Value::Str(Rc::new("small".to_string())));
+    assert_eq!(vm.globals.get("label_big").unwrap(), &Value::Str(Arc::new("big".to_string())));
+    assert_eq!(vm.globals.get("label_small").unwrap(), &Value::Str(Arc::new("small".to_string())));
 }

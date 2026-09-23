@@ -3,7 +3,7 @@ use crate::value::{NativeResult, Value};
 use crate::vm::VM;
 use std::collections::HashMap;
 use std::fs;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn register(vm: &mut VM) -> Value {
     let mut fs_module = HashMap::new();
@@ -15,16 +15,16 @@ pub fn register(vm: &mut VM) -> Value {
             if let Some(Value::Str(path)) = args.first() {
                 match fs::read_to_string(&**path) {
                     Ok(content) => {
-                        let res = Value::Tuple(Rc::new(vec![Value::Str(Rc::new(content)), Value::Nil]));
+                        let res = Value::Tuple(Arc::new(vec![Value::Str(Arc::new(content)), Value::Nil]));
                         NativeResult::Return(res)
                     }
                     Err(e) => {
-                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e.to_string()))]));
                         NativeResult::Return(res)
                     }
                 }
             } else {
-                let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Expected file path string".to_string()))]));
+                let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("Expected file path string".to_string()))]));
                 NativeResult::Return(res)
             }
         }),
@@ -38,17 +38,17 @@ pub fn register(vm: &mut VM) -> Value {
                 if let (Value::Str(path), Value::Str(content)) = (&args[0], &args[1]) {
                     return match fs::write(&**path, &**content) {
                         Ok(_) => {
-                            let res = Value::Tuple(Rc::new(vec![Value::Bool(true), Value::Nil]));
+                            let res = Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil]));
                             NativeResult::Return(res)
                         }
                         Err(e) => {
-                            let res = Value::Tuple(Rc::new(vec![Value::Bool(false), Value::Str(Rc::new(e.to_string()))]));
+                            let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new(e.to_string()))]));
                             NativeResult::Return(res)
                         }
                     };
                 }
             }
-            let res = Value::Tuple(Rc::new(vec![Value::Bool(false), Value::Str(Rc::new("Expected path and data strings".to_string()))]));
+            let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Expected path and data strings".to_string()))]));
             NativeResult::Return(res)
         }),
     );

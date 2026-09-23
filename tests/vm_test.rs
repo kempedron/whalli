@@ -1,14 +1,14 @@
 mod common;
 use common::run_code;
 use whalli::value::Value;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn test_gc_reclaims_unreachable_memory() {
     // Creates 600 temporary lists in a loop and discards them
     let code = r#"
     for i in range(600) {
-        let temp = new("list")
+        let temp = new(list)
         temp.push(i)
     }
     "#;
@@ -24,11 +24,11 @@ fn test_gc_reclaims_unreachable_memory() {
 fn test_gc_preserves_reachable_references() {
     // Preserves the surviving list in a global variable
     let code = r#"
-    let keeper = new("list")
+    let keeper = new(list)
     keeper.push("I am alive")
 
     for i in range(500) {
-        let temp = new("list")
+        let temp = new(list)
         temp.push(i)
     }
     "#;
@@ -49,14 +49,14 @@ fn test_gc_preserves_reachable_references() {
 #[test]
 fn test_collection_sort() {
     let code = r#"
-    let numbers = new("list")
+    let numbers = new(list)
     numbers.push(42)
     numbers.push(10)
     numbers.push(99)
     numbers.push(5)
     numbers.sort()
 
-    let words = new("list")
+    let words = new(list)
     words.push("cherry")
     words.push("apple")
     words.push("banana")
@@ -80,9 +80,9 @@ fn test_collection_sort() {
     let words_val = vm.globals.get("words").expect("words should exist");
     if let Value::ObjRef(id) = words_val {
         if let Ok(whalli::heap::Obj::List(list)) = vm.heap.get(*id) {
-            assert_eq!(list[0], Value::Str(Rc::new("apple".to_string())));
-            assert_eq!(list[1], Value::Str(Rc::new("banana".to_string())));
-            assert_eq!(list[2], Value::Str(Rc::new("cherry".to_string())));
+            assert_eq!(list[0], Value::Str(Arc::new("apple".to_string())));
+            assert_eq!(list[1], Value::Str(Arc::new("banana".to_string())));
+            assert_eq!(list[2], Value::Str(Arc::new("cherry".to_string())));
         } else {
             panic!("Expected list");
         }

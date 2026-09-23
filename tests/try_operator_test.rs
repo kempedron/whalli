@@ -1,7 +1,7 @@
 mod common;
 use common::run_code;
 use whalli::value::Value;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn test_try_operator_unwrap_success() {
@@ -21,7 +21,7 @@ fn test_try_operator_unwrap_success() {
 
     let vm = run_code(code);
     let result_val = vm.globals.get("result").expect("result should exist");
-    assert_eq!(result_val, &Value::Str(Rc::new("hello world".to_string())));
+    assert_eq!(result_val, &Value::Str(Arc::new("hello world".to_string())));
 
     std::fs::remove_file(test_file).ok();
 }
@@ -59,7 +59,7 @@ fn test_try_operator_chained() {
 
     func load_config(path: str) {
         let raw = fs.read(path)?
-        let config = json.decode(raw)?
+        let (config, err) = json.decode(raw)
         return config["name"]
     }
 
@@ -68,7 +68,7 @@ fn test_try_operator_chained() {
 
     let vm = run_code(code);
     let name_val = vm.globals.get("app_name").expect("app_name should exist");
-    assert_eq!(name_val, &Value::Str(Rc::new("Whalli".to_string())));
+    assert_eq!(name_val, &Value::Str(Arc::new("Whalli".to_string())));
 
     std::fs::remove_file(test_file).ok();
 }

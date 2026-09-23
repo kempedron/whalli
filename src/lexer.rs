@@ -55,9 +55,12 @@ pub enum TokenKind {
     Interface,
     Arrow,  // -> (to specify the value to be returned)
     Wo,     // woroutines (lightweight threads)
+    Defer,  // defer
     LArrow, // <-
     Question, // ? (error propagation)
     Match,    // match
+    Select,   // select
+    Default,  // default
     FatArrow, // =>
     Pipe,     // |
     DotDot,   // ..
@@ -377,7 +380,10 @@ impl Lexer {
             "nil" => TokenKind::Nil,
             "interface" => TokenKind::Interface,
             "wo" => TokenKind::Wo,
+            "defer" => TokenKind::Defer,
             "match" => TokenKind::Match,
+            "select" => TokenKind::Select,
+            "default" => TokenKind::Default,
             _ => TokenKind::Identifier(word),
         }
     }

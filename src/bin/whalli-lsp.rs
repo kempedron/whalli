@@ -164,7 +164,7 @@ impl Backend {
                     if tokens[i].kind == TokenKind::Import && i + 1 < tokens.len() {
                         match &tokens[i + 1].kind {
                             TokenKind::Identifier(mod_name) => {
-                                if !["net", "fs", "time", "math", "json", "os"].contains(&mod_name.as_str()) {
+                                if !["net", "fs", "time", "math", "json", "os", "sync"].contains(&mod_name.as_str()) {
                                     let line_idx = tokens[i].line.saturating_sub(1);
                                     let line_str = lines.get(line_idx).unwrap_or(&"");
                                     let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
@@ -182,7 +182,7 @@ impl Backend {
                                         severity: Some(DiagnosticSeverity::WARNING),
                                         source: Some("whalli".to_string()),
                                         message: format!(
-                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os (or use import \"./path.wh\")",
+                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync (or use import \"./path.wh\")",
                                             mod_name
                                         ),
                                         ..Default::default()
@@ -626,7 +626,7 @@ impl LanguageServer for Backend {
             "net", "fs", "time", "math", "json", "os", "println", "print", "range", "new", "len",
             "push", "pop", "keys", "remove", "int", "float", "str", "bool", "let",
             "func", "return", "if", "else", "while", "for", "in", "break", "continue",
-            "import", "struct", "impl", "is", "interface", "wo", "true", "false", "nil",
+            "import", "struct", "impl", "is", "interface", "wo", "defer", "true", "false", "nil",
         ];
         if reserved.contains(&target.as_str()) {
             return Ok(None);
@@ -767,10 +767,16 @@ impl LanguageServer for Backend {
 
             match caller_name {
                 "net" => {
-                    items.push(create_snippet("listen", "func net.listen(port: int) -> int\nStarts TCP server", "listen(${1:port})"));
+                    items.push(create_snippet("listen", "func net.listen(port: int, host: str = \"127.0.0.1\") -> (server_id: int, err: str | nil)\nStarts TCP server", "listen(${1:port})"));
+                    items.push(create_snippet("connect", "func net.connect(host: str, port: int) -> (client_id: int, err: str | nil)\nConnects to remote TCP server", "connect(${1:\"127.0.0.1\"}, ${2:port})"));
                     items.push(create_snippet("accept", "func net.accept(server_id: int) -> int\nAccepts incoming connection", "accept(${1:server_id})"));
-                    items.push(create_snippet("read", "func net.read(client_id: int) -> str\nReads data from client socket", "read(${1:client_id})"));
-                    items.push(create_snippet("write", "func net.write(client_id: int, data: str) -> bool\nWrites data to client socket", "write(${1:client_id}, ${2:data})"));
+                    items.push(create_snippet("read", "func net.read(client_id: int, max_bytes: int = 4096) -> (data: str | nil, err: str | nil)\nReads data from client socket", "read(${1:client_id})"));
+                    items.push(create_snippet("read_until", "func net.read_until(client_id: int, delimiter: str = \"\\r\\n\\r\\n\") -> (data: str | nil, err: str | nil)\nReads socket stream until delimiter", "read_until(${1:client_id})"));
+                    items.push(create_snippet("write", "func net.write(client_id: int, data: str) -> (ok: bool, err: str | nil)\nWrites data to client socket", "write(${1:client_id}, ${2:data})"));
+                    items.push(create_snippet("write_all", "func net.write_all(client_id: int, data: str) -> (ok: bool, err: str | nil)\nGuarantees all data written to socket", "write_all(${1:client_id}, ${2:data})"));
+                    items.push(create_snippet("peer_addr", "func net.peer_addr(client_id: int) -> str | nil\nReturns remote client IP:port address", "peer_addr(${1:client_id})"));
+                    items.push(create_snippet("local_addr", "func net.local_addr(id: int) -> str | nil\nReturns local socket IP:port address", "local_addr(${1:id})"));
+                    items.push(create_snippet("set_nodelay", "func net.set_nodelay(client_id: int, enabled: bool) -> bool\nEnables TCP_NODELAY (disables Nagle)", "set_nodelay(${1:client_id}, ${2:true})"));
                     items.push(create_snippet("close", "func net.close(client_id: int) -> bool\nCloses client socket", "close(${1:client_id})"));
                 }
                 "fs" => {
@@ -780,6 +786,7 @@ impl LanguageServer for Backend {
                 "time" => {
                     items.push(create_snippet("sleep", "func time.sleep(seconds: float)\nSuspends woroutine for specified seconds", "sleep(${1:seconds})"));
                     items.push(create_snippet("now", "func time.now() -> float\nReturns UNIX timestamp in seconds", "now()"));
+                    items.push(create_snippet("after", "func time.after(seconds: float) -> chan\nReturns channel that fires after specified seconds", "after(${1:1.0})"));
                 }
                 "math" => {
                     items.push(CompletionItem {
@@ -804,6 +811,10 @@ impl LanguageServer for Backend {
                     items.push(create_snippet("set_env", "func os.set_env(key: str, val: str) -> bool\nSets environment variable", "set_env(${1:\"KEY\"}, ${2:\"VALUE\"})"));
                     items.push(create_snippet("cwd", "func os.cwd() -> str\nReturns current working directory", "cwd()"));
                     items.push(create_snippet("exit", "func os.exit(code: int)\nExits process immediately", "exit(${1:0})"));
+                }
+                "sync" => {
+                    items.push(create_snippet("WaitGroup", "func sync.WaitGroup() -> WaitGroup\nCreates a synchronization wait group", "WaitGroup()"));
+                    items.push(create_snippet("Mutex", "func sync.Mutex() -> Mutex\nCreates a mutual exclusion lock", "Mutex()"));
                 }
                 _ => {
                     // Check if caller matches a known struct with methods
@@ -830,7 +841,17 @@ impl LanguageServer for Backend {
                         }
                     }
 
-                    // Builtin methods on collections/strings/tuples
+                    // Builtin methods on collections/strings/tuples/concurrency
+                    items.push(create_snippet("close", "method chan.close()\nCloses channel", "close()"));
+                    items.push(create_snippet("add", "method wg.add(delta: int)\nAdds to WaitGroup counter", "add(${1:1})"));
+                    items.push(create_snippet("done", "method wg.done()\nDecrements WaitGroup counter by 1", "done()"));
+                    items.push(create_snippet("wait", "method wg.wait()\nWaits until WaitGroup counter is zero", "wait()"));
+                    items.push(create_snippet("lock", "method mu.lock()\nLocks the mutex, blocking until available", "lock()"));
+                    items.push(create_snippet("unlock", "method mu.unlock()\nUnlocks the mutex", "unlock()"));
+                    items.push(create_snippet("try_lock", "method mu.try_lock() -> bool\nAttempts to lock mutex without blocking", "try_lock()"));
+                    items.push(create_snippet("result", "method task.result() -> (any, str | nil)\nWaits for task and returns (result, err)", "result()"));
+                    items.push(create_snippet("is_done", "method task.is_done() -> bool\nChecks if task finished execution", "is_done()"));
+                    items.push(create_snippet("status", "method task.status() -> str\nReturns task status: running, completed, or failed", "status()"));
                     items.push(create_snippet("sort", "method collection.sort()\nSorts elements in ascending order", "sort()"));
                     items.push(create_snippet("push", "method list.push(item: any)\nAppends item to list", "push(${1:item})"));
                     items.push(create_snippet("pop", "method list.pop() -> any\nRemoves and returns last item of list", "pop()"));
@@ -855,31 +876,18 @@ impl LanguageServer for Backend {
             items.push(create_snippet("println", "println(...args: any)\nPrints values to stdout with newline", "println(${1:value})"));
             items.push(create_snippet("print", "print(...args: any)\nPrints values to stdout without newline", "print(${1:value})"));
             items.push(create_snippet("range", "range(start, end, step = 1)\nGenerates numeric range for loop", "range(${1:start}, ${2:end}, ${3:step})"));
-            items.push(create_snippet("new list", "new(\"list\")\nAllocates a new heap list", "new(\"list\")"));
-            items.push(create_snippet("new map", "new(\"map\")\nAllocates a new heap map", "new(\"map\")"));
-            items.push(create_snippet("new chan", "new(\"chan\", capacity)\nAllocates a new woroutine channel", "new(\"chan\", ${1:capacity})"));
-
-            // Language construct snippets
-            items.push(create_snippet("func", "Function declaration", "func ${1:name}(${2:params}) {\n\t${0}\n}"));
-            items.push(create_snippet("func->", "Function with return type", "func ${1:name}(${2:params}) -> ${3:type} {\n\t${0}\n}"));
-            items.push(create_snippet("struct", "Struct declaration", "struct ${1:Name} {\n\t${2:field}: ${3:type}\n}"));
-            items.push(create_snippet("impl", "Method implementation block", "impl ${1:Name} {\n\tfunc ${2:method}(${3:params}) {\n\t\t${0}\n\t}\n}"));
-            items.push(create_snippet("interface", "Interface declaration", "interface ${1:Name} {\n\t${2:method}\n}"));
-            items.push(create_snippet("for in", "Iterate over collection", "for ${1:item} in ${2:collection} {\n\t${0}\n}"));
-            items.push(create_snippet("for range", "Iterate over numeric range", "for ${1:i} in range(${2:0}, ${3:10}) {\n\t${0}\n}"));
-            items.push(create_snippet("while", "While loop", "while ${1:condition} {\n\t${0}\n}"));
-            items.push(create_snippet("if", "If condition", "if ${1:condition} {\n\t${0}\n}"));
-            items.push(create_snippet("ifelse", "If-Else condition", "if ${1:condition} {\n\t${2}\n} else {\n\t${0}\n}"));
-            items.push(create_snippet("wo", "Spawn async woroutine", "wo ${1:func_name}(${2})"));
-            items.push(create_snippet("import file", "Import local .wh file", "import \"./${1:file}.wh\""));
-            items.push(create_snippet("import std", "Import standard library module", "import ${1|net,fs,time,math,json,os|}"));
-            items.push(create_snippet("match", "Pattern matching expression", "match ${1:expression} {\n\t${2:pattern} => ${0}\n}"));
+            items.push(create_snippet("new list", "Allocates a new heap list", "new(list)"));
+            items.push(create_snippet("new map", "Allocates a new heap map", "new(map)"));
+            items.push(create_snippet("new chan", "Allocates a new woroutine channel", "new(chan, ${1:capacity})"));
+            items.push(create_snippet("select", "Multiplexes channel operations", "select {\n\t${1:msg} <- ${2:ch} => ${0},\n\tdefault => {}\n}"));
+            items.push(create_snippet("sync.WaitGroup", "Creates a WaitGroup", "let wg = sync.WaitGroup()\nwg.add(${1:1})\n"));
+            items.push(create_snippet("sync.Mutex", "Creates a Mutex", "let mu = sync.Mutex()\nmu.lock()\n${1}\nmu.unlock()\n"));
 
             // Keywords
             for kw in [
                 "let", "func", "return", "if", "else", "while", "for", "in",
                 "and", "or", "not", "break", "continue", "import", "struct",
-                "impl", "is", "interface", "wo", "match", "true", "false", "nil",
+                "impl", "is", "interface", "wo", "defer", "match", "select", "default", "true", "false", "nil",
             ] {
                 items.push(CompletionItem {
                     label: kw.to_string(),
@@ -899,7 +907,7 @@ impl LanguageServer for Backend {
             }
 
             // Modules
-            for m in ["net", "fs", "time", "math", "json", "os"] {
+            for m in ["net", "fs", "time", "math", "json", "os", "sync"] {
                 items.push(CompletionItem {
                     label: m.to_string(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -1524,16 +1532,34 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
     let doc_str = if let Some(rec) = receiver {
         match (rec, word) {
             ("net", "listen") => {
-                "```whalli\nfunc net.listen(port: int) -> (server_id: int, err: str | nil)\n```\nBinds a non-blocking TCP server listener to `127.0.0.1:<port>` registered with the MIO asynchronous event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (server, err) = net.listen(8080)\nif err != nil {\n    println(\"Bind failed:\", err)\n    return\n}\n```\n\n#### Parameters\n- `port`: The TCP port number to bind on localhost.\n\n#### Returns\nTuple `(server_id, err)`: Server socket token ID, or error message."
+                "```whalli\nfunc net.listen(port: int, host: str = \"127.0.0.1\") -> (server_id: int, err: str | nil)\n```\nBinds a non-blocking TCP server listener to `<host>:<port>` registered with the MIO asynchronous event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (server, err) = net.listen(8080)\nif err != nil {\n    println(\"Bind failed:\", err)\n    return\n}\n```\n\n#### Parameters\n- `port`: The TCP port number to bind on localhost.\n- `host`: Optional IP address string (defaults to `\"127.0.0.1\"`).\n\n#### Returns\nTuple `(server_id, err)`: Server socket token ID, or error message."
+            }
+            ("net", "connect") => {
+                "```whalli\nfunc net.connect(host: str, port: int) -> (client_id: int, err: str | nil)\n```\nEstablishes a non-blocking client TCP connection to `<host>:<port>` registered with the MIO asynchronous event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (client, err) = net.connect(\"127.0.0.1\", 8080)\nif err != nil {\n    println(\"Connection failed:\", err)\n    return\n}\n```\n\n#### Parameters\n- `host`: Target server IP address or hostname.\n- `port`: Target TCP port number.\n\n#### Returns\nTuple `(client_id, err)`: Client socket token ID, or error message."
             }
             ("net", "accept") => {
                 "```whalli\nfunc net.accept(server_id: int) -> int\n```\nAccepts an incoming TCP connection on the specified server socket. Suspends the current woroutine until a client connects.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (srv, err) = net.listen(8080)\nlet client = net.accept(srv)\nprintln(\"New client connected:\", client)\n```\n\n#### Parameters\n- `server_id`: The server token ID returned from `net.listen`.\n\n#### Returns\n`int`: A client connection token ID for read/write operations."
             }
             ("net", "read") => {
-                "```whalli\nfunc net.read(client_id: int) -> (data: str, err: str | nil)\n```\nReads available data bytes (up to 4096 bytes) from the client socket. Suspends the current woroutine until data arrives.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (data, err) = net.read(client)\nif err != nil {\n    println(\"Read error:\", err)\n} else if data != nil {\n    println(\"Received:\", data)\n}\n```\n\n#### Parameters\n- `client_id`: The client socket token returned by `net.accept`.\n\n#### Returns\nTuple `(data, err)`: Received string payload, or error description."
+                "```whalli\nfunc net.read(client_id: int, max_bytes: int = 4096) -> (data: str | nil, err: str | nil)\n```\nReads available data bytes (up to `max_bytes`) from the client socket. Suspends the current woroutine until data arrives.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (data, err) = net.read(client)\nif err != nil {\n    println(\"Read error:\", err)\n} else if data != nil {\n    println(\"Received:\", data)\n}\n```\n\n#### Parameters\n- `client_id`: The client socket token returned by `net.accept` or `net.connect`.\n- `max_bytes`: Maximum buffer size (default 4096).\n\n#### Returns\nTuple `(data, err)`: Received string payload, or error description."
+            }
+            ("net", "read_until") => {
+                "```whalli\nfunc net.read_until(client_id: int, delimiter: str = \"\\r\\n\\r\\n\") -> (data: str | nil, err: str | nil)\n```\nReads bytes from the socket in native Rust until `delimiter` is encountered. Ideal for parsing HTTP headers and stream frames.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (headers, err) = net.read_until(client, \"\\r\\n\\r\\n\")\n```\n\n#### Parameters\n- `client_id`: The client socket token.\n- `delimiter`: Substring delimiter to search for (default `\"\\r\\n\\r\\n\"`).\n\n#### Returns\nTuple `(data, err)`: Accumulated payload or error."
             }
             ("net", "write") => {
                 "```whalli\nfunc net.write(client_id: int, data: str) -> (ok: bool, err: str | nil)\n```\nTransmits a string of bytes over the client TCP socket. Suspends the current woroutine if socket buffer is full.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (ok, err) = net.write(client, \"HTTP/1.1 200 OK\\r\\n\\r\\nHello!\")\n```\n\n#### Parameters\n- `client_id`: The client socket token.\n- `data`: The string payload to send.\n\n#### Returns\nTuple `(ok, err)`: Boolean success flag and optional error message."
+            }
+            ("net", "write_all") => {
+                "```whalli\nfunc net.write_all(client_id: int, data: str) -> (ok: bool, err: str | nil)\n```\nEnsures the entire string buffer is transmitted over the TCP socket, handling partial writes automatically.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet (ok, err) = net.write_all(client, payload)\n```\n\n#### Parameters\n- `client_id`: The client socket token.\n- `data`: The string payload to send completely.\n\n#### Returns\nTuple `(ok, err)`: Boolean success flag and optional error message."
+            }
+            ("net", "peer_addr") => {
+                "```whalli\nfunc net.peer_addr(client_id: int) -> str | nil\n```\nReturns the remote client's `IP:port` address string.\n\n---\n\n### Examples\n```whalli\nimport net\n\nlet ip = net.peer_addr(client)\nprintln(\"Remote:\", ip)\n```"
+            }
+            ("net", "local_addr") => {
+                "```whalli\nfunc net.local_addr(id: int) -> str | nil\n```\nReturns the socket's local `IP:port` address string."
+            }
+            ("net", "set_nodelay") => {
+                "```whalli\nfunc net.set_nodelay(client_id: int, enabled: bool) -> bool\n```\nEnables or disables `TCP_NODELAY` (disabling Nagle's algorithm) for lowest latency responses."
             }
             ("net", "close") => {
                 "```whalli\nfunc net.close(client_id: int) -> bool\n```\nCloses the client connection and deregisters the stream from the event loop.\n\n---\n\n### Examples\n```whalli\nimport net\n\nnet.close(client)\n```\n\n#### Parameters\n- `client_id`: The socket token to close."
@@ -1546,6 +1572,9 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             }
             ("time", "now") => {
                 "```whalli\nfunc time.now() -> float\n```\nReturns the current UNIX timestamp in seconds with fractional floating-point precision.\n\n---\n\n### Examples\n```whalli\nimport time\n\nlet start = time.now()\n// do work...\nlet elapsed = time.now() - start\nprintln(\"Elapsed seconds:\", elapsed)\n```\n\n#### Returns\n`float`: Seconds elapsed since UNIX Epoch (January 1, 1970)."
+            }
+            ("time", "after") => {
+                "```whalli\nfunc time.after(seconds: float) -> chan\n```\nReturns a channel that delivers the current timestamp after `seconds` have elapsed. Ideal for implementing timeouts in `select`.\n\n---\n\n### Examples\n```whalli\nimport time\n\nselect {\n    msg <- data_ch => println(\"Received:\", msg),\n    <- time.after(2.0) => println(\"Timed out waiting for data!\")\n}\n```\n\n#### Parameters\n- `seconds`: Timeout duration in seconds (`float` or `int`).\n\n#### Returns\n`chan`: Channel that receives timestamp upon timer expiration."
             }
             ("time", "sleep") => {
                 "```whalli\nfunc time.sleep(seconds: float)\n```\nNon-blocking sleep: suspends the current woroutine for `seconds` and yields execution to other tasks without blocking the thread pool.\n\n---\n\n### Examples\n```whalli\nimport time\n\ntime.sleep(1.5) // sleep for 1.5 seconds\nprintln(\"Awake!\")\n```\n\n#### Parameters\n- `seconds`: Duration to sleep in seconds (`float` or `int`)."
@@ -1576,6 +1605,33 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             }
             ("os", "exit") => {
                 "```whalli\nfunc os.exit(code: int)\n```\nTerminates the current process immediately with the specified integer exit code.\n\n---\n\n### Examples\n```whalli\nimport os\n\nos.exit(0) // exit successfully\n```\n\n#### Parameters\n- `code`: Integer exit status (0 for success)."
+            }
+            ("sync", "WaitGroup") => {
+                "```whalli\nfunc sync.WaitGroup() -> WaitGroup\n```\nCreates a synchronization counter to wait for a collection of concurrent woroutines to finish.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nlet wg = sync.WaitGroup()\nwg.add(1)\nwo func() {\n    // do work\n    wg.done()\n}()\nwg.wait()\n```"
+            }
+            ("sync", "Mutex") => {
+                "```whalli\nfunc sync.Mutex() -> Mutex\n```\nCreates a mutual exclusion lock for synchronizing shared state across concurrent woroutines.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nlet mu = sync.Mutex()\nmu.lock()\n// critical section\nmu.unlock()\n```"
+            }
+            (_, "close") => {
+                "```whalli\nmethod chan.close()\n```\nCloses the channel. Subsequent writes will fail, and readers will receive remaining buffered elements followed by `nil`."
+            }
+            (_, "add") => {
+                "```whalli\nmethod wg.add(delta: int)\n```\nIncrements the WaitGroup counter by `delta`."
+            }
+            (_, "done") => {
+                "```whalli\nmethod wg.done()\n```\nDecrements the WaitGroup counter by 1. When the counter reaches 0, unblocks all tasks waiting on `wg.wait()`."
+            }
+            (_, "wait") => {
+                "```whalli\nmethod wg.wait()\n```\nBlocks the current woroutine until the WaitGroup counter drops to zero."
+            }
+            (_, "result") => {
+                "```whalli\nmethod task.result() -> (result: any, err: str | nil)\n```\nWaits for the asynchronous task to complete and returns a 2-tuple `(result, err)`.\nIf the task succeeded, returns `(value, nil)`.\nIf the task panicked or failed, returns `(nil, err_msg)`.\n\n---\n\n### Examples\n```whalli\nlet t = wo calculate(10, 20)\nlet (res, err) = t.result()\nif err != nil {\n    println(\"Error:\", err)\n} else {\n    println(\"Result:\", res)\n}\n```"
+            }
+            (_, "is_done") => {
+                "```whalli\nmethod task.is_done() -> bool\n```\nNon-blocking check whether the task has finished execution (completed or failed)."
+            }
+            (_, "status") => {
+                "```whalli\nmethod task.status() -> str\n```\nReturns the current execution status of the task: `\"running\"`, `\"completed\"`, or `\"failed\"`."
             }
             (_, "sort") => {
                 "```whalli\nmethod collection.sort()\n```\nSorts elements in ascending order.\n- For `list`: sorts elements **in-place** and returns `nil`.\n- For `tuple`: returns a **new sorted tuple**.\n\n---\n\n### Examples\n```whalli\nlet arr = new(\"list\")\narr.push(5)\narr.push(2)\narr.push(8)\narr.sort()\nprintln(arr) // [2, 5, 8]\n```"
@@ -1698,6 +1754,9 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "wo" => {
                 "### Keyword `wo` (woroutine)\nSpawns a function call into an asynchronous cooperative lightweight thread (woroutine).\nWoroutines yield cooperatively on channel I/O and non-blocking network operations without operating system thread overhead.\n\n---\n\n### Examples\n```whalli\nfunc worker(ch) {\n    ch <- \"work complete\"\n}\n\nlet ch = new(\"chan\", 1)\nwo worker(ch)\n\nlet result = <- ch\nprintln(result) // \"work complete\"\n```".to_string()
             }
+            "defer" => {
+                "### Keyword `defer` (Deferred Call)\nDefers the execution of a function or method call until the surrounding function returns.\nMultiple deferred calls are executed in Last-In, First-Out (LIFO) order.\nArguments are evaluated immediately when the `defer` statement is executed.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nfunc worker(mu) {\n    mu.lock()\n    defer mu.unlock()\n    // critical section\n}\n```".to_string()
+            }
             "func" => {
                 "### Keyword `func`\nDefines a function with optional parameter typing and return type signature.\n\n---\n\n### Examples\n```whalli\nfunc calculate(a: int, b: int) -> int {\n    return a + b\n}\n\nlet sum = calculate(10, 20)\nprintln(sum) // 30\n```".to_string()
             }
@@ -1735,6 +1794,13 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "nil" => "Literal representing absence of value (`nil`).".to_string(),
             "match" => {
                 "### Keyword `match` (Pattern Matching)\nMatches an expression against a set of patterns and evaluates the corresponding arm body.\nSupports literal values, numeric ranges (`..` and `..=`), tuple destructuring, type checking (`n: int`), alternatives (`|`), guards (`if <expr>`), and wildcard (`_`).\n\n---\n\n### Examples\n```whalli\nlet grade = match score {\n    90..=100 => \"A\",\n    80..90   => \"B\",\n    0..80    => \"F\",\n    _        => \"Invalid\"\n}\n\nmatch (x, y) {\n    (0, 0) => println(\"Origin\"),\n    (a, b) if a == b => println(\"Diagonal\"),\n    (a, b) => println(f\"Point: {a}, {b}\")\n}\n```".to_string()
+            },
+            "select" => {
+                "### Keyword `select` (Channel Multiplexing)\nWaits on multiple channel operations simultaneously. Executes the first case that is ready to communicate (or `default` if none are ready).\n\n---\n\n### Examples\n```whalli\nselect {\n    msg <- data_ch => println(\"Received:\", msg),\n    cmd <- stop_ch => println(\"Stopped\"),\n    default => println(\"No messages ready\")\n}\n```".to_string()
+            }
+            "default" => "### Keyword `default`\nFallback case in `select` statement executed immediately if no communication channels are ready.".to_string(),
+            "sync" => {
+                "### Module `sync`\nConcurrency and synchronization primitives.\n\n---\n\n### Examples\n```whalli\nimport sync\n\nlet wg = sync.WaitGroup()\nwg.add(1)\n// ...\nwg.done()\nwg.wait()\n\nlet mu = sync.Mutex()\nmu.lock()\n// critical section\nmu.unlock()\n```\n\n#### Members:\n- `WaitGroup() -> WaitGroup`: Synchronization counter\n- `Mutex() -> Mutex`: Mutual exclusion lock".to_string()
             }
             _ => {
                 if let Some(f) = index.functions.iter().find(|f| f.name == word) {
@@ -2609,13 +2675,13 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
                 let (token_type, token_modifiers) = match word.as_str() {
                     "let" | "func" | "return" | "if" | "else" | "while" | "for" | "in"
                     | "break" | "continue" | "import" | "struct" | "impl" | "is"
-                    | "interface" | "wo" | "match" | "true" | "false" | "nil" => (0, 0), // KEYWORD
+                    | "interface" | "wo" | "defer" | "match" | "select" | "default" | "true" | "false" | "nil" => (0, 0), // KEYWORD
 
                     "and" | "or" | "not" => (8, 0), // OPERATOR
 
                     "int" | "float" | "str" | "bool" | "list" | "map" | "chan" | "tuple" => (1, 0), // TYPE
 
-                    "net" | "fs" | "time" | "math" | "json" | "os" => (3, 2), // VARIABLE + DEFAULT_LIBRARY
+                    "net" | "fs" | "time" | "math" | "json" | "os" | "sync" => (3, 2), // VARIABLE + DEFAULT_LIBRARY
 
                     "println" | "print" | "range" | "new" | "len" => (2, 2), // FUNCTION + DEFAULT_LIBRARY
 

@@ -2,7 +2,7 @@ use crate::heap::{Heap, Obj};
 use crate::value::{NativeResult, Value};
 use crate::vm::VM;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
     match val {
@@ -31,14 +31,14 @@ fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
                     }
                     Obj::Map(map) => {
                         let mut json_obj = serde_json::Map::new();
-                        for (k, v) in map {
+                        for (k, v) in &map {
                             json_obj.insert(k.clone(), value_to_json(v, heap));
                         }
                         serde_json::Value::Object(json_obj)
                     }
                     Obj::Instance { fields, .. } => {
                         let mut json_obj = serde_json::Map::new();
-                        for (k, v) in fields {
+                        for (k, v) in &fields {
                             json_obj.insert(k.clone(), value_to_json(v, heap));
                         }
                         serde_json::Value::Object(json_obj)
@@ -64,7 +64,7 @@ fn json_to_value(jv: serde_json::Value, heap: &mut Heap) -> Value {
                 Value::Float(num.as_f64().unwrap_or(0.0))
             }
         }
-        serde_json::Value::String(s) => Value::Str(Rc::new(s)),
+        serde_json::Value::String(s) => Value::Str(Arc::new(s)),
         serde_json::Value::Array(arr) => {
             let elements: Vec<Value> = arr.into_iter().map(|v| json_to_value(v, heap)).collect();
             let id = heap.alloc(Obj::List(elements));
@@ -91,9 +91,9 @@ pub fn register(vm: &mut VM) -> Value {
             if let Some(val) = args.first() {
                 let json_val = value_to_json(val, &vm.heap);
                 let json_str = serde_json::to_string(&json_val).unwrap_or_else(|_| "null".to_string());
-                NativeResult::Return(Value::Str(Rc::new(json_str)))
+                NativeResult::Return(Value::Str(Arc::new(json_str)))
             } else {
-                NativeResult::Return(Value::Str(Rc::new("null".to_string())))
+                NativeResult::Return(Value::Str(Arc::new("null".to_string())))
             }
         }),
     );
@@ -106,16 +106,16 @@ pub fn register(vm: &mut VM) -> Value {
                 match serde_json::from_str::<serde_json::Value>(json_str.as_str()) {
                     Ok(parsed) => {
                         let val = json_to_value(parsed, &mut vm.heap);
-                        let res = Value::Tuple(Rc::new(vec![val, Value::Nil]));
+                        let res = Value::Tuple(Arc::new(vec![val, Value::Nil]));
                         NativeResult::Return(res)
                     }
                     Err(e) => {
-                        let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new(e.to_string()))]));
+                        let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e.to_string()))]));
                         NativeResult::Return(res)
                     }
                 }
             } else {
-                let res = Value::Tuple(Rc::new(vec![Value::Nil, Value::Str(Rc::new("Expected JSON string".to_string()))]));
+                let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("Expected JSON string".to_string()))]));
                 NativeResult::Return(res)
             }
         }),

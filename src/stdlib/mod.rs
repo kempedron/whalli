@@ -3,12 +3,13 @@ mod json;
 mod math;
 mod net;
 mod os;
+mod sync;
 mod time;
 
 use crate::value::{NativeResult, Value};
 use crate::vm::VM;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String, Value>) {
     let mut globals = HashMap::new();
@@ -66,8 +67,8 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
         "str".to_string(),
         Value::Native(|args, vm| {
             let val = match args.first() {
-                Some(val) => Value::Str(Rc::new(val.stringify(&vm.heap))),
-                None => Value::Str(Rc::new("".to_string())),
+                Some(val) => Value::Str(Arc::new(val.stringify(&vm.heap))),
+                None => Value::Str(Arc::new("".to_string())),
             };
             NativeResult::Return(val)
         }),
@@ -90,17 +91,22 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     );
 
     // new(<type>, <length>, <capacity>)
-    // If capacity is not transferred - capacity = lengtha
+    // Strict typing: accepts only type identifiers like list, map, chan. Strings are rejected.
     globals.insert(
         "new".to_string(),
         Value::Native(|args, vm| {
             if args.is_empty() {
-                return crate::value::NativeResult::Return(Value::Nil);
+                panic!("TypeError: new() requires at least 1 argument: a type identifier, e.g. new(list)");
             }
 
             let type_name = match &args[0] {
-                Value::Str(s) => s.as_str(),
-                _ => return crate::value::NativeResult::Return(Value::Nil),
+                Value::Type(t) => t.as_str(),
+                Value::Str(_) => {
+                    panic!("TypeError: new() expects a type identifier, e.g. new(list), not a string literal");
+                }
+                _ => {
+                    panic!("TypeError: new() expects a type identifier, e.g. new(list), new(map), new(chan)");
+                }
             };
 
             let arg_len = if args.len() > 1 {
@@ -137,19 +143,20 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
                     crate::value::NativeResult::Return(Value::ObjRef(id))
                 }
                 "chan" => {
-                    let id = vm.heap.alloc(crate::heap::Obj::Channel(
-                        std::collections::VecDeque::with_capacity(arg_len),
-                    ));
+                    let cap = if arg_cap == 0 { 1 } else { arg_cap };
+                    let id = vm.heap.alloc(crate::heap::Obj::Channel {
+                        queue: std::collections::VecDeque::with_capacity(cap),
+                        capacity: cap,
+                        closed: false,
+                    });
                     crate::value::NativeResult::Return(Value::ObjRef(id))
                 }
                 "tuple" => {
-                    let mut elements = Vec::with_capacity(arg_len);
-                    for _ in 0..arg_len {
-                        elements.push(Value::Nil);
-                    }
-                    crate::value::NativeResult::Return(Value::Tuple(Rc::new(elements)))
+                    panic!("TypeError: tuples are immutable and cannot be created via new(). Use literal syntax (item1, item2, ...)");
                 }
-                _ => crate::value::NativeResult::Return(Value::Nil),
+                other => {
+                    panic!("TypeError: cannot instantiate type '{}' with new(). Use new(list), new(map), or new(chan)", other);
+                }
             }
         }),
     );
@@ -194,6 +201,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     modules.insert("net".to_string(), net::register(vm));
     modules.insert("json".to_string(), json::register(vm));
     modules.insert("os".to_string(), os::register(vm));
+    modules.insert("sync".to_string(), sync::register(vm));
 
     (globals, modules)
 }

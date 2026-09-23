@@ -24,7 +24,7 @@
     },
     {
       "name": "keyword.control.whalli",
-      "match": "\\b(if|else|while|for|in|break|continue|return|wo|match)\\b"
+      "match": "\\b(if|else|while|for|in|break|continue|return|wo|defer|match|select|default)\\b"
     },
     {
       "name": "keyword.declaration.whalli",
@@ -44,7 +44,7 @@
     },
     {
       "name": "support.class.whalli",
-      "match": "\\b(net|fs|time|math|json|os)\\b"
+      "match": "\\b(net|fs|time|math|json|os|sync)\\b"
     },
     {
       "name": "support.function.builtin.whalli",

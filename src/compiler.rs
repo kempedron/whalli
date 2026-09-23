@@ -3,7 +3,7 @@ use crate::{
     opcode::{OpCode, UpvalueLoc},
     value::{FunctionObj, Value},
 };
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct Local {
     pub name: String,
@@ -215,7 +215,7 @@ impl Compiler {
                     }
                 }
 
-                let func_value = Rc::new(state.function);
+                        let func_value = Arc::new(state.function);
 
                 self.emit(OpCode::Closure(func_value, upvalue_locs));
                 self.emit(OpCode::StoreGlobal(name.clone()));
@@ -483,7 +483,7 @@ impl Compiler {
                             }
                         }
 
-                        let func_value = Rc::new(state.function);
+                let func_value = Arc::new(state.function);
                         self.emit(OpCode::Closure(func_value, upvalue_locs));
 
                         self.emit(OpCode::AddMethod(name.clone()));
@@ -521,7 +521,25 @@ impl Compiler {
                     self.compile_expr(arg);
                 }
                 self.emit(OpCode::Spawn(args.len()));
+                self.emit(OpCode::Pop);
             }
+            Stmt::Defer(expr) => match &**expr {
+                Expr::Call(callee, args) => {
+                    self.compile_expr(callee);
+                    for arg in args {
+                        self.compile_expr(arg);
+                    }
+                    self.emit(OpCode::DeferCall(args.len()));
+                }
+                Expr::MethodCall(obj, method_name, args) => {
+                    self.compile_expr(obj);
+                    for arg in args {
+                        self.compile_expr(arg);
+                    }
+                    self.emit(OpCode::DeferMethodCall(method_name.clone(), args.len()));
+                }
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -631,7 +649,107 @@ impl Compiler {
             Expr::Match { subject, arms } => {
                 self.compile_match(subject, arms);
             }
+            Expr::Select(arms) => {
+                self.compile_select(arms);
+            }
+            Expr::Spawn(callee, args) => {
+                self.compile_expr(callee);
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                self.emit(OpCode::Spawn(args.len()));
+            }
         }
+    }
+
+    fn compile_select(&mut self, arms: &[crate::ast::SelectArm]) {
+        use crate::ast::SelectArmKind;
+        use crate::opcode::SelectCaseOp;
+
+        // 1. Prepare cases and evaluate their channel/value expressions onto stack
+        let mut case_ops = Vec::new();
+
+        for arm in arms {
+            match &arm.kind {
+                SelectArmKind::Default => {
+                    case_ops.push(SelectCaseOp::Default);
+                }
+                SelectArmKind::Recv(_var, chan) => {
+                    self.compile_expr(chan);
+                    case_ops.push(SelectCaseOp::Recv);
+                }
+                SelectArmKind::Send(chan, val) => {
+                    self.compile_expr(val);
+                    self.compile_expr(chan);
+                    case_ops.push(SelectCaseOp::Send);
+                }
+            }
+        }
+
+        // Emit Select opcode (it consumes channel/value arguments and leaves exactly:
+        // [val_slot, idx_slot]
+        self.emit(OpCode::Select(case_ops));
+
+        let current_depth = self.current_state().scope_depth + 1;
+        let val_slot = self.current_state().locals.len();
+        self.current_state().locals.push(Local {
+            name: format!("<select_val_{}>", val_slot),
+            depth: current_depth,
+        });
+
+        let idx_slot = self.current_state().locals.len();
+        self.current_state().locals.push(Local {
+            name: format!("<select_idx_{}>", idx_slot),
+            depth: current_depth,
+        });
+
+        let mut end_jumps = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            // Check if selected_case == idx
+            self.emit(OpCode::LoadLocal(idx_slot));
+            self.emit(OpCode::Push(Value::Int(idx as i64)));
+            self.emit(OpCode::Equal);
+
+            let next_case_jump = self.emit_jump(OpCode::JumpIfFalse(0));
+
+            let arm_locals_start = self.current_state().locals.len();
+
+            if let SelectArmKind::Recv(var_name, _) = &arm.kind {
+                // Bind var_name from val_slot
+                self.emit(OpCode::LoadLocal(val_slot));
+                let depth = self.current_state().scope_depth;
+                self.current_state().locals.push(Local {
+                    name: var_name.clone(),
+                    depth,
+                });
+            }
+
+            self.compile_expr(&arm.body);
+            // Result of arm body goes to val_slot (which will be final select result)
+            self.emit(OpCode::SetLocal(val_slot));
+
+            let pops = self.current_state().locals.len() - arm_locals_start;
+            for _ in 0..pops {
+                self.emit(OpCode::Pop);
+            }
+            self.current_state().locals.truncate(arm_locals_start);
+
+            end_jumps.push(self.emit_jump(OpCode::Jump(0)));
+
+            let next_target = self.current_ip();
+            self.patch_jump(next_case_jump, next_target);
+        }
+
+        let end_target = self.current_ip();
+        for j in end_jumps {
+            self.patch_jump(j, end_target);
+        }
+
+        // Pop idx_slot from stack, leaving val_slot (the result) on top!
+        self.emit(OpCode::Pop);
+        self.current_state().locals.pop(); // pop idx_slot from compiler locals
+        self.current_state().locals.pop(); // pop val_slot marker so it now holds expression result
     }
 
     fn compile_match(&mut self, subject: &Expr, arms: &[crate::ast::MatchArm]) {

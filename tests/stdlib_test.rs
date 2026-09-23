@@ -1,14 +1,14 @@
 mod common;
 use common::run_code;
 use whalli::value::Value;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn test_json_encode_decode() {
     let code = r#"
     import json
 
-    let user = new("map")
+    let user = new(map)
     user["name"] = "Alice"
     user["age"] = 30
     let encoded = json.encode(user)
@@ -21,7 +21,7 @@ fn test_json_encode_decode() {
     "#;
     let vm = run_code(code);
     let name_val = vm.globals.get("name_val").expect("name_val should exist");
-    assert_eq!(name_val, &Value::Str(Rc::new("Alice".to_string())));
+    assert_eq!(name_val, &Value::Str(Arc::new("Alice".to_string())));
 
     let age_val = vm.globals.get("age_val").expect("age_val should exist");
     assert_eq!(age_val, &Value::Int(30));
@@ -42,7 +42,7 @@ fn test_fs_error_handling() {
     "#;
     let vm = run_code(code);
     let content_val = vm.globals.get("content").expect("content should exist");
-    assert_eq!(content_val, &Value::Str(Rc::new("hello error handling".to_string())));
+    assert_eq!(content_val, &Value::Str(Arc::new("hello error handling".to_string())));
 
     let read_err = vm.globals.get("read_err").expect("read_err should exist");
     assert_eq!(read_err, &Value::Nil);
@@ -68,7 +68,7 @@ fn test_os_module() {
     "#;
     let vm = run_code(code);
     let read_back = vm.globals.get("read_back").expect("read_back should exist");
-    assert_eq!(read_back, &Value::Str(Rc::new("whalli_123".to_string())));
+    assert_eq!(read_back, &Value::Str(Arc::new("whalli_123".to_string())));
 
     let non_existent = vm.globals.get("non_existent").expect("non_existent should exist");
     assert_eq!(non_existent, &Value::Nil);
@@ -92,19 +92,19 @@ fn test_string_and_list_methods() {
     let vm = run_code(code);
 
     let trimmed = vm.globals.get("trimmed").expect("trimmed should exist");
-    assert_eq!(trimmed, &Value::Str(Rc::new("apple,banana,orange".to_string())));
+    assert_eq!(trimmed, &Value::Str(Arc::new("apple,banana,orange".to_string())));
 
     let joined = vm.globals.get("joined").expect("joined should exist");
-    assert_eq!(joined, &Value::Str(Rc::new("apple - banana - orange".to_string())));
+    assert_eq!(joined, &Value::Str(Arc::new("apple - banana - orange".to_string())));
 
     let has_banana = vm.globals.get("has_banana").expect("has_banana should exist");
     assert_eq!(has_banana, &Value::Bool(true));
 
     let replaced = vm.globals.get("replaced").expect("replaced should exist");
-    assert_eq!(replaced, &Value::Str(Rc::new("hello whalli".to_string())));
+    assert_eq!(replaced, &Value::Str(Arc::new("hello whalli".to_string())));
 
     let upper = vm.globals.get("upper").expect("upper should exist");
-    assert_eq!(upper, &Value::Str(Rc::new("HELLO WORLD".to_string())));
+    assert_eq!(upper, &Value::Str(Arc::new("HELLO WORLD".to_string())));
 
     let starts = vm.globals.get("starts").expect("starts should exist");
     assert_eq!(starts, &Value::Bool(true));

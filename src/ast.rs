@@ -40,6 +40,19 @@ pub struct MatchArm {
 }
 
 #[derive(Debug, Clone)]
+pub enum SelectArmKind {
+    Recv(String, Expr), // var <- chan
+    Send(Expr, Expr),   // chan <- val
+    Default,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectArm {
+    pub kind: SelectArmKind,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Value),
     Variable(String),
@@ -59,6 +72,8 @@ pub enum Expr {
         subject: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    Select(Vec<SelectArm>),
+    Spawn(Box<Expr>, Vec<Expr>),
 }
 
 #[derive(Debug)]
@@ -99,4 +114,5 @@ pub enum Stmt {
     Line(usize),
     Interface(String, Vec<String>),
     Spawn(Box<Expr>, Vec<Expr>),
+    Defer(Box<Expr>),
 }

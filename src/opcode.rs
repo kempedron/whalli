@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::value::{FunctionObj, Value};
 
@@ -6,6 +6,13 @@ use crate::value::{FunctionObj, Value};
 pub enum UpvalueLoc {
     Local(usize),
     Upvalue(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectCaseOp {
+    Recv,
+    Send,
+    Default,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,7 +51,7 @@ pub enum OpCode {
     ImportFile(String),
     GetUpvalue(usize),
     SetUpvalue(usize),
-    Closure(Rc<FunctionObj>, Vec<UpvalueLoc>),
+    Closure(Arc<FunctionObj>, Vec<UpvalueLoc>),
     BuildStruct(String, Vec<String>),
     AddMethod(String),
     BuildInterface(Vec<String>),
@@ -57,4 +64,7 @@ pub enum OpCode {
     ChanRecv,
     IterNext(usize),
     PropagateError,
+    Select(Vec<SelectCaseOp>),
+    DeferCall(usize),
+    DeferMethodCall(String, usize),
 }

@@ -1,7 +1,7 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::{
-    ast::{BinaryOp, Expr, MatchArm, Pattern, Stmt, UnaryOp},
+    ast::{BinaryOp, Expr, MatchArm, Pattern, SelectArm, SelectArmKind, Stmt, UnaryOp},
     lexer::{Lexer, Token, TokenKind},
     value::Value,
 };
@@ -284,13 +284,25 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::Wo) {
-            let expr = self.parse_expression()?;
+            let expr = self.parse_primary()?;
             self.consume_stmt_end()?;
 
             if let Expr::Call(callee, args) = expr {
                 return Ok(Stmt::Spawn(callee, args));
             } else {
                 return Err(self.error("Expected function call after 'wo'"));
+            }
+        }
+
+        if self.match_token(TokenKind::Defer) {
+            let expr = self.parse_expression()?;
+            self.consume_stmt_end()?;
+
+            match expr {
+                Expr::Call(_, _) | Expr::MethodCall(_, _, _) => {
+                    return Ok(Stmt::Defer(Box::new(expr)));
+                }
+                _ => return Err(self.error("Expected function or method call after 'defer'")),
             }
         }
 
@@ -470,6 +482,10 @@ impl Parser {
             return self.parse_match();
         }
 
+        if self.match_token(TokenKind::Select) {
+            return self.parse_select();
+        }
+
         if self.match_token(TokenKind::Sub) {
             let expr = self.parse_primary()?;
             match expr {
@@ -493,6 +509,15 @@ impl Parser {
         if self.match_token(TokenKind::LArrow) {
             let right = self.parse_primary()?;
             return Ok(Expr::ChanRecv(Box::new(right)));
+        }
+
+        if self.match_token(TokenKind::Wo) {
+            let expr = self.parse_primary()?;
+            if let Expr::Call(callee, args) = expr {
+                return Ok(Expr::Spawn(callee, args));
+            } else {
+                return Err(self.error("Expected function call after 'wo'"));
+            }
         }
 
         if self.match_token(TokenKind::LParen) {
@@ -563,7 +588,7 @@ impl Parser {
 
         let token = self.advance().clone();
         let mut expr = match token {
-            TokenKind::Str(s) => Expr::Literal(Value::Str(Rc::new(s))),
+            TokenKind::Str(s) => Expr::Literal(Value::Str(Arc::new(s))),
             TokenKind::FStr(s) => self.parse_interpolated_string(&s)?,
             TokenKind::Int(n) => Expr::Literal(Value::Int(n)),
             TokenKind::Float(n) => Expr::Literal(Value::Float(n)),
@@ -610,7 +635,7 @@ impl Parser {
                     self.consume(TokenKind::RParen, "Expected ')' after arguments")?;
                     expr = Expr::MethodCall(Box::new(expr), prop_name, args);
                 } else {
-                    let string_key = Expr::Literal(Value::Str(Rc::new(prop_name)));
+                    let string_key = Expr::Literal(Value::Str(Arc::new(prop_name)));
                     expr = Expr::Index(Box::new(expr), Box::new(string_key));
                 }
             } else if self.match_token(TokenKind::Question) {
@@ -633,7 +658,7 @@ impl Parser {
         while i < chars.len() {
             if chars[i] == '{' {
                 if !current_literal.is_empty() {
-                    parts.push(Expr::Literal(Value::Str(Rc::new(current_literal))));
+                    parts.push(Expr::Literal(Value::Str(Arc::new(current_literal))));
                     current_literal = String::new();
                 }
                 i += 1;
@@ -667,11 +692,11 @@ impl Parser {
             }
         }
         if !current_literal.is_empty() {
-            parts.push(Expr::Literal(Value::Str(Rc::new(current_literal))));
+            parts.push(Expr::Literal(Value::Str(Arc::new(current_literal))));
         }
 
         if parts.is_empty() {
-            return Ok(Expr::Literal(Value::Str(Rc::new("".to_string()))));
+            return Ok(Expr::Literal(Value::Str(Arc::new("".to_string()))));
         }
 
         let mut expr = parts[0].clone();
@@ -871,11 +896,91 @@ impl Parser {
                 }
             }
             TokenKind::Float(f) => Ok(Pattern::Literal(Value::Float(f))),
-            TokenKind::Str(s) => Ok(Pattern::Literal(Value::Str(std::rc::Rc::new(s)))),
+            TokenKind::Str(s) => Ok(Pattern::Literal(Value::Str(Arc::new(s)))),
             TokenKind::True => Ok(Pattern::Literal(Value::Bool(true))),
             TokenKind::False => Ok(Pattern::Literal(Value::Bool(false))),
             TokenKind::Nil => Ok(Pattern::Literal(Value::Nil)),
             other => Err(self.error(&format!("Expected pattern, found {:?}", other))),
         }
+    }
+
+    fn parse_select(&mut self) -> Result<Expr, ParseError> {
+        while self.match_token(TokenKind::NewLine) {}
+        self.consume(TokenKind::LBrace, "Expected '{' after 'select'")?;
+
+        let mut arms = Vec::new();
+        while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+            while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Semicolon) {}
+            if self.check_token(TokenKind::RBrace) {
+                break;
+            }
+
+            let arm = self.parse_select_arm()?;
+            arms.push(arm);
+
+            while self.match_token(TokenKind::Comma)
+                || self.match_token(TokenKind::NewLine)
+                || self.match_token(TokenKind::Semicolon)
+            {}
+        }
+        self.consume(TokenKind::RBrace, "Expected '}' after select block")?;
+
+        Ok(Expr::Select(arms))
+    }
+
+    fn parse_select_arm(&mut self) -> Result<SelectArm, ParseError> {
+        if self.match_token(TokenKind::Default) {
+            self.consume(TokenKind::FatArrow, "Expected '=>' after 'default'")?;
+            while self.match_token(TokenKind::NewLine) {}
+            let body = self.parse_expression()?;
+            return Ok(SelectArm {
+                kind: SelectArmKind::Default,
+                body,
+            });
+        }
+
+        // Case: <- channel_expr => body (anonymous receive, e.g. <- time.after(1.0) => ...)
+        if self.match_token(TokenKind::LArrow) {
+            let chan_expr = self.parse_expression()?;
+            self.consume(TokenKind::FatArrow, "Expected '=>' after select case")?;
+            while self.match_token(TokenKind::NewLine) {}
+            let body = self.parse_expression()?;
+            return Ok(SelectArm {
+                kind: SelectArmKind::Recv("_".to_string(), chan_expr),
+                body,
+            });
+        }
+
+        // Case: identifier <- channel_expr => body (receive)
+        if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].kind == TokenKind::LArrow {
+            let ident_token = self.advance().clone();
+            let var_name = match ident_token {
+                TokenKind::Identifier(name) => name,
+                _ => return Err(self.error("Expected variable name before '<-' in select")),
+            };
+            self.consume(TokenKind::LArrow, "Expected '<-' after variable in select")?;
+            let chan_expr = self.parse_expression()?;
+            self.consume(TokenKind::FatArrow, "Expected '=>' after select case")?;
+            while self.match_token(TokenKind::NewLine) {}
+            let body = self.parse_expression()?;
+            return Ok(SelectArm {
+                kind: SelectArmKind::Recv(var_name, chan_expr),
+                body,
+            });
+        }
+
+        // Case: channel_expr <- val_expr => body (send)
+        let expr = self.parse_expression()?;
+        if let Expr::ChanSend(chan, val) = expr {
+            self.consume(TokenKind::FatArrow, "Expected '=>' after send expression in select")?;
+            while self.match_token(TokenKind::NewLine) {}
+            let body = self.parse_expression()?;
+            return Ok(SelectArm {
+                kind: SelectArmKind::Send(*chan, *val),
+                body,
+            });
+        }
+
+        Err(self.error("Expected select arm: 'var <- chan => ...', 'chan <- val => ...', or 'default => ...'"))
     }
 }
