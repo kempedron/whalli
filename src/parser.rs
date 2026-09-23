@@ -939,7 +939,7 @@ impl Parser {
             });
         }
 
-        // Case: <- channel_expr => body (anonymous receive, e.g. <- time.after(1.0) => ...)
+        // <- channel_expr => body (anonymous receive, e.g. <- time.after(1.0) => ...)
         if self.match_token(TokenKind::LArrow) {
             let chan_expr = self.parse_expression()?;
             self.consume(TokenKind::FatArrow, "Expected '=>' after select case")?;
@@ -951,7 +951,7 @@ impl Parser {
             });
         }
 
-        // Case: identifier <- channel_expr => body (receive)
+        // identifier <- channel_expr => body (receive)
         if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].kind == TokenKind::LArrow {
             let ident_token = self.advance().clone();
             let var_name = match ident_token {
@@ -969,7 +969,7 @@ impl Parser {
             });
         }
 
-        // Case: channel_expr <- val_expr => body (send)
+        // channel_expr <- val_expr => body (send)
         let expr = self.parse_expression()?;
         if let Expr::ChanSend(chan, val) = expr {
             self.consume(TokenKind::FatArrow, "Expected '=>' after send expression in select")?;

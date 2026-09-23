@@ -666,7 +666,7 @@ impl Compiler {
         use crate::ast::SelectArmKind;
         use crate::opcode::SelectCaseOp;
 
-        // 1. Prepare cases and evaluate their channel/value expressions onto stack
+        // Prepare cases and evaluate their channel/value expressions onto stack
         let mut case_ops = Vec::new();
 
         for arm in arms {
@@ -774,7 +774,7 @@ impl Compiler {
             // If pattern doesn't match, jump directly to next arm (no variables were bound)
             let fail_pattern_jump = self.emit_jump(OpCode::JumpIfFalse(0));
 
-            // 2. Pattern matched! Now bind variables for guards and body
+            // 2. Pattern matched
             self.bind_pattern_variables(&arm.pattern, subj_slot);
             let bound_count = self.current_state().locals.len() - arm_locals_start;
 
@@ -788,10 +788,8 @@ impl Compiler {
             // 4. Evaluate arm body
             self.compile_expr(&arm.body);
 
-            // Store result into subject slot (reusing slot for match result)
             self.emit(OpCode::SetLocal(subj_slot));
 
-            // Pop bound variables from stack
             for _ in 0..bound_count {
                 self.emit(OpCode::Pop);
             }
@@ -830,7 +828,6 @@ impl Compiler {
             self.patch_jump(j, end_target);
         }
 
-        // Pop subject marker from compiler locals so stack slot now holds match result
         self.current_state().locals.pop();
     }
 

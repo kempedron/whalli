@@ -508,7 +508,6 @@ impl VM {
             let _ = w.join();
         }
 
-        // Post-execution GC sweep: reclaim any leftover temporaries
         {
             let globals = shared.globals.read();
             for val in globals.values() {
@@ -614,12 +613,11 @@ fn find_task(
     stealers: &[Stealer<Task>],
     worker_idx: usize,
 ) -> Option<Task> {
-    // 1. Pop from local queue (fastest, lock-free, zero contention)
     if let Some(t) = local.pop() {
         return Some(t);
     }
 
-    // 2. Steal a batch from global injector into local queue
+    // Steal a batch from global injector into local queue
     loop {
         match injector.steal_batch_and_pop(local) {
             Steal::Success(t) => return Some(t),
@@ -631,7 +629,6 @@ fn find_task(
     // 3. Work-Stealing: steal from peers
     let num_stealers = stealers.len();
     if num_stealers > 1 {
-        // Start from next worker to distribute stealing evenly
         for i in 1..num_stealers {
             let victim = (worker_idx + i) % num_stealers;
             loop {
@@ -750,9 +747,8 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
     macro_rules! fail {
         ($msg:expr) => {{
             let err_msg = $msg.to_string();
-            // If background task, isolate error and run defers!
+            // If background task, isolate error and run defers
             if !current_task.is_main {
-                // Unwind all defers
                 while let Some(mut frame) = current_task.frames.pop() {
                     while let Some(deferred) = frame.defers.pop() {
                         execute_sync_deferred(&deferred, shared, current_line);
@@ -937,7 +933,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                     args.push(pop!());
                                 }
                                 args.reverse();
-                                pop!(); // pop callee
+                                pop!();
 
                                 for (i, field_name) in fields.iter().enumerate() {
                                     instance_fields.insert(field_name.clone(), args[i].clone());
