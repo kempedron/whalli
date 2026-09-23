@@ -117,3 +117,131 @@ fn test_http_listen_and_serve_with_router_and_requests() {
     // 4. 404
     assert_eq!(vm.globals.get("is_404"), Some(&Value::Bool(true)));
 }
+
+#[test]
+fn test_http_backend_full_features() {
+    let code = r#"
+    import http
+    import requests
+    import time
+
+    let port = 19124
+    let router = http.router()
+
+    // 1. Global middleware for auth check on /protected
+    func auth_middleware(req) {
+        if req["path"].starts_with("/api/v1/protected") {
+            let token = req.header("x-auth-token", "")
+            if token != "secret-token-123" {
+                return http.json_error(401, "Unauthorized: missing valid auth token")
+            }
+        }
+        return nil
+    }
+    router.use(auth_middleware)
+
+    // 2. Custom not_found handler returning JSON
+    func custom_404(req) {
+        return http.json_error(404, f"API endpoint {req[\"path\"]} not found")
+    }
+    router.not_found(custom_404)
+
+    // 3. Handlers
+    func handle_protected(req) {
+        return http.json_response(200, {"secret": "classified-data"})
+    }
+
+    func handle_cookie_echo(req) {
+        let sess = req.cookie("session_id", "anonymous")
+        return http.json_response(200, {"session": sess})
+    }
+
+    // 4. Grouped routes
+    let api = router.group("/api")
+    let v1 = api.group("/v1")
+    v1.get("/protected", handle_protected)
+    v1.get("/cookie-check", handle_cookie_echo)
+
+    // 5. Static file serving
+    router.static("/public", ".")
+
+    // Start server
+    wo http.listen_and_serve(f"127.0.0.1:{port}", router)
+    time.sleep(0.08)
+
+    // A. Test unauthorized access to protected route -> 401
+    let r_unauth = requests.get(f"http://127.0.0.1:{port}/api/v1/protected", {"timeout": 3})
+    let status_unauth = r_unauth.status_code
+    let data_unauth = r_unauth.json()
+    let unauth_err = data_unauth["error"]
+
+    // B. Test authorized access with header -> 200
+    let r_auth = requests.get(f"http://127.0.0.1:{port}/api/v1/protected", {
+        "headers": {"X-Auth-Token": "secret-token-123"},
+        "timeout": 3
+    })
+    let status_auth = r_auth.status_code
+    let auth_data = r_auth.json()
+    let secret = auth_data["secret"]
+
+    // C. Test cookie parsing on server
+    let r_cookie = requests.get(f"http://127.0.0.1:{port}/api/v1/cookie-check", {
+        "headers": {"Cookie": "session_id=user_sess_777; other=1"},
+        "timeout": 3
+    })
+    let cookie_sess = r_cookie.json()["session"]
+
+    // D. Test static file serving (/public/Cargo.toml)
+    let r_static = requests.get(f"http://127.0.0.1:{port}/public/Cargo.toml", {"timeout": 3})
+    let static_ok = r_static.ok
+    let static_has_pkg = r_static.text.contains("[package]")
+
+    // E. Test 405 Method Not Allowed: POST to /api/v1/protected (only GET registered)
+    let r_405 = requests.post(f"http://127.0.0.1:{port}/api/v1/protected", {
+        "headers": {"X-Auth-Token": "secret-token-123"},
+        "timeout": 3
+    })
+    let is_405 = r_405.status_code == 405
+    let allow_header = r_405.headers["allow"]
+
+    // F. Test custom JSON 404
+    let r_custom_404 = requests.get(f"http://127.0.0.1:{port}/missing/path", {"timeout": 3})
+    let is_404_code = r_custom_404.status_code == 404
+    let not_found_msg = r_custom_404.json()["error"]
+
+    // Graceful shutdown
+    http.close(router.server_id)
+    "#;
+
+    let vm = run_code(code);
+
+    assert_eq!(vm.globals.get("status_unauth"), Some(&Value::Int(401)));
+    assert_eq!(
+        vm.globals.get("unauth_err"),
+        Some(&Value::Str(Arc::new("Unauthorized: missing valid auth token".to_string())))
+    );
+
+    assert_eq!(vm.globals.get("status_auth"), Some(&Value::Int(200)));
+    assert_eq!(
+        vm.globals.get("secret"),
+        Some(&Value::Str(Arc::new("classified-data".to_string())))
+    );
+
+    assert_eq!(
+        vm.globals.get("cookie_sess"),
+        Some(&Value::Str(Arc::new("user_sess_777".to_string())))
+    );
+
+    assert_eq!(vm.globals.get("static_ok"), Some(&Value::Bool(true)));
+    assert_eq!(vm.globals.get("static_has_pkg"), Some(&Value::Bool(true)));
+
+    assert_eq!(vm.globals.get("is_405"), Some(&Value::Bool(true)));
+    let allow_hdr = vm.globals.get("allow_header").unwrap().to_string();
+    assert!(allow_hdr.contains("GET"));
+
+    assert_eq!(vm.globals.get("is_404_code"), Some(&Value::Bool(true)));
+    assert_eq!(
+        vm.globals.get("not_found_msg"),
+        Some(&Value::Str(Arc::new("API endpoint /missing/path not found".to_string())))
+    );
+}

@@ -1,10 +1,11 @@
 mod fs;
-mod http;
+pub(crate) mod http;
 pub(crate) mod json;
 mod math;
 pub(crate) mod net;
 mod os;
 mod requests;
+pub mod sql;
 mod sync;
 mod time;
 
@@ -206,6 +207,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     modules.insert("sync".to_string(), sync::register(vm));
     modules.insert("requests".to_string(), requests::register(vm));
     modules.insert("http".to_string(), http::register(vm));
+    modules.insert("sql".to_string(), sql::register(vm));
 
     (globals, modules)
 }

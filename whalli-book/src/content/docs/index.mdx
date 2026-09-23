@@ -1,0 +1,58 @@
+---
+title: Whalli
+description: Lightweight modern language with woroutines, Keep-Alive HTTP backend & SQL — learn Whalli from scratch.
+template: splash
+hero:
+  tagline: Lightweight, modern language with native woroutines, non-blocking I/O and batteries-included backend.
+  image:
+    file: ../assets/whalli.png
+  actions:
+    - text: Get Started
+      link: /intro/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/kempedron/whalli
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why Whalli?
+
+<CardGrid stagger>
+  <Card title="Woroutines & Channels" icon="rocket">
+    Lightweight cooperative multitasking with `wo` and `chan` — thousands of concurrent tasks on a fixed thread pool.
+  </Card>
+  <Card title="Modern HTTP Backend" icon="laptop">
+    Go `net/http`-level framework: REST routing, middleware, Keep-Alive, static files — self-contained for small backends.
+  </Card>
+  <Card title="Unified SQL" icon="document">
+    Single API for SQLite (bundled), PostgreSQL and MySQL — `sql.open`, `db.exec`, `db.query` with auto placeholder translation.
+  </Card>
+  <Card title="Batteries Included" icon="star">
+    Production LSP, VS Code extension, non-blocking `mio` I/O and rich stdlib — tooling ships with the compiler.
+  </Card>
+</CardGrid>
+
+## Quick Example — REST API with SQLite
+
+```whalli
+import http
+import sql
+
+let (db, _) = sql.open("sqlite", "app.db")
+db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT)")
+
+let router = http.router()
+router.use(http.cors())
+router.use(http.logger())
+
+router.get("/api/tasks", func(req) {
+    let (rows, _) = db.query("SELECT * FROM tasks")
+    return http.json_response(200, rows)
+})
+
+http.listen_and_serve(":8888", router)
+```

@@ -41,52 +41,78 @@ while true {
 
 ## `http` Module
 
-`import http` (`http.rs:217-767`) — higher-level HTTP over `net`.
+`import http` (`http.rs`) — high-level backend HTTP server and REST framework over `net`.
 
-### Server
+### Server Functions and Constants
 
-| Function | Signature |
-|---|---|
-| `listen` | `listen(addr: str\|int) -> (server_id, err)` — `parse_addr_str` supports `":8080"`, `"127.0.0.1:8080"`, `8080` (`http.rs:16-49, 220-267`). |
-| `read_request` | `read_request(client_id) -> (req: map\|nil, err)` — reads until headers + `Content-Length` bytes satisfied (`http.rs:269-364`). |
-| `parse_request` | `parse_request(raw: str) -> (req, err)` — uses `httparse` + `url_decode` (`http.rs:366-387, 134-154`). |
-| `response` | `response(code: int, headers: map\|nil, body: str) -> str` |
-| `json_response` | `json_response(code: int, data: any, headers: map\|nil) -> str` — `Content-Type: application/json` |
-| `text_response` | `text_response(code: int, text: str, headers) -> str` — `text/plain; charset=utf-8` |
-| `html_response` | `html_response(code: int, html: str, headers) -> str` — `text/html; charset=utf-8` |
-| `status_text` | `status_text(code: int) -> str` — table `http.rs:51-84` |
-| `router` | `router() -> Router (map)` — creates `{ routes: { "GET": {}, ... } }` (`http.rs:673-691`) |
-| `match_route` | `match_route(router, method: str, path: str) -> (handler\|nil, params\|nil)` — exact + `:param` segment matching (`http.rs:583-670`) |
-| `listen_and_serve` | `listen_and_serve(addr, handler: Router|func) -> (ok, err)` — loops `accept`, spawns `wo _serve_client` per connection (`http.rs:698-741`) |
-| `accept/write_all/set_nodelay/close` | re-exported from `net` for self-contained server (`http.rs:693-696`) |
+| Function / Constant | Signature / Value | Description |
+|---|---|---|
+| `listen` | `listen(addr: str\|int) -> (server_id, err)` | Supports `":8080"`, `"127.0.0.1:8080"`, `8080`. |
+| `read_request` | `read_request(client_id) -> (req: map\|nil, err)` | Reads until headers + `Content-Length` satisfied. |
+| `parse_request` | `parse_request(raw: str) -> (req, err)` | Parses raw HTTP request text via `httparse` + URL decoder. |
+| `response` | `response(code: int, headers: map\|nil, body: str) -> str` | Formats generic HTTP/1.1 response string. |
+| `json_response` | `json_response(code: int, data: any, headers: map\|nil) -> str` | Automatic `Content-Type: application/json` + serialization. |
+| `text_response` | `text_response(code: int, text: str, headers: map\|nil) -> str` | `Content-Type: text/plain; charset=utf-8`. |
+| `html_response` | `html_response(code: int, html: str, headers: map\|nil) -> str` | `Content-Type: text/html; charset=utf-8`. |
+| `file_response` | `file_response(base_dir: str, rel_path: str = "", headers: map\|nil) -> str` | Static file serving with MIME detection & traversal safety (`..` -> 403). |
+| `redirect` | `redirect(url: str, code: int = 302, headers: map\|nil) -> str` | Builds HTTP redirect with `Location` header. |
+| `error` | `error(code: int = 500, message: str = "") -> str` | Builds text error response with status code. |
+| `json_error` | `json_error(code: int = 500, message: str = "") -> str` | Builds standard JSON error `{"error": msg, "code": code}`. |
+| `set_cookie` | `set_cookie(name: str, value: str, opts: map\|nil) -> str` | Builds `Set-Cookie` header value with path, domain, max_age, http_only, secure, same_site. |
+| `status_text` | `status_text(code: int) -> str` | Returns standard HTTP reason string for code. |
+| `allowed_methods` | `allowed_methods(router, path: str) -> list[str]` | Inspects router and returns allowed HTTP methods for a path. |
+| `router` | `router() -> Router (map)` | Creates new router with route registry, middlewares, and groups. |
+| `match_route` | `match_route(router, method: str, path: str) -> (handler\|nil, params\|nil)` | Exact, `:param`, and `*filepath` wildcard matching. |
+| `listen_and_serve` | `listen_and_serve(addr, handler: Router\|func) -> (ok, err)` | Loops `accept`, spawns concurrent `wo _serve_client` per connection. |
+| `accept/write_all/set_nodelay/close` | Re-exported from `net` | For self-contained server execution. |
+| Status Constants | `http.STATUS_OK` (200), `http.STATUS_CREATED` (201), `http.STATUS_NO_CONTENT` (204), `http.STATUS_BAD_REQUEST` (400), `http.STATUS_UNAUTHORIZED` (401), `http.STATUS_FORBIDDEN` (403), `http.STATUS_NOT_FOUND` (404), `http.STATUS_METHOD_NOT_ALLOWED` (405), `http.STATUS_INTERNAL_SERVER_ERROR` (500) | Standard HTTP status code constants. |
 
-### Request Map
+### Request Map and Methods
 
-`parse_http_request_bytes` (`http.rs:156-215`) produces map:
+`parse_http_request_bytes` (`http.rs`) produces `req`:
 
-```
+```whalli
 {
-  "method": "GET",
+  "method": "POST",
   "url": "/api/users/42?active=true",
   "path": "/api/users/42",
-  "query": map["active": "true"],   // URL-decoded
-  "headers": map[lowercase keys],
+  "query": {"active": "true"},      // URL-decoded query map
+  "headers": {"content-type": "..."},// lowercase keys
+  "cookies": {"session": "xyz"},    // parsed from Cookie header
+  "form": {"field": "val"},         // parsed application/x-www-form-urlencoded
   "body": str,
   "proto": "HTTP/1.1",
+  "remote_addr": "127.0.0.1:54321", // Client socket address
 }
 ```
 
-Added `json()` method: `req.json()` parses `req["body"]` (or `req["text"]`) via `serde_json` (`value.rs:313-334`, `http_test.rs:74`).
+Methods on `req`:
+- `req.json()`: parses `req["body"]` via `serde_json` into Whalli structures.
+- `req.header(key, default = nil)`: case-insensitive header lookup.
+- `req.cookie(name, default = nil)`: cookie lookup.
+- `req.query(key, default = nil)`: query string parameter lookup.
+- `req.param(key, default = nil)`: URL route parameter lookup (e.g. `:id` or `*filepath`).
+- `req.form()`: returns parsed urlencoded form map.
+- `req.form_value(key, default = nil)`: urlencoded form field lookup.
 
-### Response Builder
+### Routing & Middleware Features
 
-`build_http_response` (`http.rs:86-132`): `HTTP/1.1 <code> <reason>\r\nContent-Length: <n>\r\nConnection: close\r\n[Content-Type]\r\n[custom headers]\r\n\r\n<body>`. Custom headers override `Content-Type` if `content-type` key present (case-insensitive).
-
-### Routing
-
-- Registration via `map` method sugar (`value.rs:336-389`): `router.get(path, handler)` etc. `router.handle(method, path, handler)` for arbitrary method.
-- Matching: first exact `path_routes.get(target)`, else segment-wise `:param` (`http.rs:608-648`). `params` map values are `Str`.
-- Handler signature: `func(req) -> http_response_str`. Called inside `_whalli_http_serve_client` (`http.rs:699-723`): sets `req["params"]` if present, invokes handler, `write_all` response, `close`.
+- **Route registration**: `router.get(path, handler)`, `router.post(path, handler)`, `router.put(...)`, `router.delete(...)`, `router.patch(...)`, `router.head(...)`, `router.options(...)`, `router.handle(method, path, handler)`.
+- **Parameter matching**: `:name` segment parameters (e.g. `/api/users/:id`), extracted into `req["params"]["id"]` or `req.param("id")`.
+- **Catch-all wildcards**: `*filepath` matching (e.g. `/static/*filepath`), matches trailing subpath.
+- **Middlewares**: `router.use(func(req))` registers global or group middlewares. Middleware returning non-nil response halts execution and sends that response immediately. Out-of-the-box middlewares:
+  - `http.cors(opts)`: Handles `OPTIONS` preflight with 204 and adds `Access-Control-*` headers.
+  - `http.logger()`: Logs formatted request lines `[METHOD] /path (from IP)`.
+  - `http.secure_headers()`: Automatically sets browser security headers (`X-Frame-Options`, `nosniff`, `XSS`, `CSP`).
+  - `http.request_id(header_name)`: Traces request IDs via `req["id"]` and output header `X-Request-ID`.
+  - `http.rate_limiter(max_req, window_sec)`: Sliding-window rate limiter returning 429 Too Many Requests.
+- **Route groups**: `let api = router.group("/api")`, `let v1 = api.group("/v1")`. Groups inherit prefix and middlewares.
+- **Static file serving**: `router.static(url_prefix, directory_path)` registers automatic static file serving with MIME detection and path traversal protection (`..` -> 403).
+- **Keep-Alive**: All HTTP responses default to HTTP/1.1 `Connection: keep-alive` (with `Keep-Alive: timeout=5, max=100`) and handle `Connection: close` requests appropriately.
+- **Custom Error Handlers**:
+  - `router.not_found(func(req))` sets custom 404 handler (e.g. returning JSON).
+  - `router.method_not_allowed(func(req))` sets custom 405 handler (automatic `Allow` header with permitted methods).
+- **Graceful shutdown**: `http.close(router.server_id)` closes the listener socket.
 
 ## `requests` Module (Client)
 

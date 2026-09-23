@@ -12,3 +12,6 @@ parking_lot = "0.12"
 crossbeam-deque = "0.8"
 httparse = "1.9"
 ureq = { version = "3.4", features = ["json"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+postgres = { version = "0.19", default-features = false }
+mysql = { version = "25.0", default-features = false }

@@ -633,6 +633,29 @@ fn execute_sync_deferred(deferred: &DeferredCall, shared: &SharedRuntime, curren
                         _ => {}
                     }
                 });
+
+                let map_fn = shared.heap.with_read(*id, |obj_ref| {
+                    if let crate::heap::Obj::Map(map) = obj_ref {
+                        map.get(method_name).cloned()
+                    } else {
+                        None
+                    }
+                }).ok().flatten();
+
+                if let Some(Value::Native(native_fn)) = map_fn {
+                    let mut temp_vm = VM {
+                        main_task: None,
+                        globals: shared.globals.read().clone(),
+                        modules: shared.modules.read().clone(),
+                        heap: shared.heap.clone(),
+                        current_line,
+                        gc_threshold: shared.gc_threshold.load(Ordering::Relaxed),
+                        imported_files: HashSet::new(),
+                        net: Arc::clone(&shared.net),
+                        channel_timers: Arc::clone(&shared.channel_timers),
+                    };
+                    let _ = native_fn(args.clone(), &mut temp_vm);
+                }
             }
             let _ = obj.call_method(method_name, args.clone(), &shared.heap);
         }
@@ -1086,7 +1109,16 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                 }
                             }).ok().flatten();
 
-                            if let Some(val) = map_val {
+                            let is_callable = match &map_val {
+                                Some(Value::Native(_)) => true,
+                                Some(Value::ObjRef(cid)) => {
+                                    matches!(shared.heap.get(*cid), Ok(heap::Obj::Closure(_, _)))
+                                }
+                                _ => false,
+                            };
+
+                            if is_callable {
+                                let val = map_val.unwrap();
                                 handled = true;
                                 current_task.stack.push(val.clone());
                                 for arg in &args {
@@ -1412,6 +1444,10 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                     (crate::heap::Obj::Map(map), Value::Str(key)) => {
                                         Ok(map.get(&**key).unwrap_or(&Value::Nil).clone())
                                     }
+                                    (crate::heap::Obj::Map(map), idx_val) => {
+                                        let key = format!("{}", idx_val);
+                                        Ok(map.get(&key).unwrap_or(&Value::Nil).clone())
+                                    }
                                     (crate::heap::Obj::Instance { fields, .. }, Value::Str(key)) => {
                                         Ok(fields.get(&**key).unwrap_or(&Value::Nil).clone())
                                     }
@@ -1467,6 +1503,11 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                     }
                                     (crate::heap::Obj::Map(map), Value::Str(key)) => {
                                         map.insert((*key).clone(), value);
+                                        Ok(())
+                                    }
+                                    (crate::heap::Obj::Map(map), idx_val) => {
+                                        let key = format!("{}", idx_val);
+                                        map.insert(key, value);
                                         Ok(())
                                     }
                                     (crate::heap::Obj::Instance { fields, .. }, Value::Str(key)) => {
@@ -1633,6 +1674,28 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                             _ => {}
                                         }
                                     });
+                                    let map_fn = shared.heap.with_read(*id, |obj_ref| {
+                                        if let crate::heap::Obj::Map(map) = obj_ref {
+                                            map.get(&method_name).cloned()
+                                        } else {
+                                            None
+                                        }
+                                    }).ok().flatten();
+
+                                    if let Some(Value::Native(native_fn)) = map_fn {
+                                        let mut temp_vm = VM {
+                                            main_task: None,
+                                            globals: shared.globals.read().clone(),
+                                            modules: shared.modules.read().clone(),
+                                            heap: shared.heap.clone(),
+                                            current_line,
+                                            gc_threshold: shared.gc_threshold.load(Ordering::Relaxed),
+                                            imported_files: HashSet::new(),
+                                            net: Arc::clone(&shared.net),
+                                            channel_timers: Arc::clone(&shared.channel_timers),
+                                        };
+                                        let _ = native_fn(args.clone(), &mut temp_vm);
+                                    }
                                 }
                                 let _ = obj.call_method(&method_name, args, &shared.heap);
                             }

@@ -1,4 +1,5 @@
 use mio::Token;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
@@ -310,6 +311,419 @@ impl Value {
                             let new_id = heap.alloc(Obj::List(keys));
                             Ok(Value::ObjRef(new_id))
                         }
+                        "header" => {
+                            if args.is_empty() {
+                                return Err("'header' expects header name string".to_string());
+                            }
+                            let key = args[0].stringify(heap).to_lowercase();
+                            let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                            heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(h_id)) = m.get("headers") {
+                                        if let Ok(Obj::Map(h_map)) = heap.get(*h_id) {
+                                            return Ok(h_map.get(&key).cloned().unwrap_or(default_val));
+                                        }
+                                    }
+                                }
+                                Ok(default_val)
+                            })?
+                        }
+                        "cookie" => {
+                            if args.is_empty() {
+                                return Err("'cookie' expects cookie name string".to_string());
+                            }
+                            let key = match &args[0] {
+                                Value::Str(s) => s.as_str(),
+                                _ => return Err("Cookie name must be a string".to_string()),
+                            };
+                            let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                            heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(c_id)) = m.get("cookies") {
+                                        if let Ok(Obj::Map(c_map)) = heap.get(*c_id) {
+                                            return Ok(c_map.get(key).cloned().unwrap_or(default_val));
+                                        }
+                                    }
+                                }
+                                Ok(default_val)
+                            })?
+                        }
+                        "close" => {
+                            let db_id_opt = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    if let Some(Value::Int(db_id)) = map.get("db_id") {
+                                        return Some(*db_id as usize);
+                                    }
+                                }
+                                None
+                            })?;
+
+                            if let Some(conn_id) = db_id_opt {
+                                let ok = crate::stdlib::sql::db_manager().close(conn_id);
+                                Ok(Value::Bool(ok))
+                            } else {
+                                Err("Method 'close' not found on map".to_string())
+                            }
+                        }
+                        "exec" => {
+                            let db_id = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    if let Some(Value::Int(db_id)) = map.get("db_id") {
+                                        return Ok(*db_id as usize);
+                                    }
+                                }
+                                Err("Method 'exec' only valid on database objects".to_string())
+                            })??;
+
+                            if args.is_empty() {
+                                return Err("'exec' expects SQL query string".to_string());
+                            }
+                            let query = match &args[0] {
+                                Value::Str(s) => s.as_str(),
+                                _ => return Err("SQL query must be a string".to_string()),
+                            };
+                            let params = crate::stdlib::sql::convert_sql_args(args.get(1), heap);
+                            match crate::stdlib::sql::db_exec_internal(db_id, query, params, heap) {
+                                Ok(res_val) => Ok(Value::Tuple(Arc::new(vec![res_val, Value::Nil]))),
+                                Err(e) => Ok(Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e))]))),
+                            }
+                        }
+                        "query" => {
+                            let is_db = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.contains_key("db_id")
+                                } else {
+                                    false
+                                }
+                            }).unwrap_or(false);
+
+                            if is_db {
+                                let db_id = heap.with_read(*id, |obj| {
+                                    if let Obj::Map(map) = obj {
+                                        if let Some(Value::Int(db_id)) = map.get("db_id") {
+                                            return Ok(*db_id as usize);
+                                        }
+                                    }
+                                    Err("Database object missing db_id".to_string())
+                                })??;
+
+                                if args.is_empty() {
+                                    return Err("'query' expects SQL query string".to_string());
+                                }
+                                let query = match &args[0] {
+                                    Value::Str(s) => s.as_str(),
+                                    _ => return Err("SQL query must be a string".to_string()),
+                                };
+                                let params = crate::stdlib::sql::convert_sql_args(args.get(1), heap);
+                                match crate::stdlib::sql::db_query_internal(db_id, query, params, heap) {
+                                    Ok(rows_val) => Ok(Value::Tuple(Arc::new(vec![rows_val, Value::Nil]))),
+                                    Err(e) => Ok(Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e))]))),
+                                }
+                            } else {
+                                if args.is_empty() {
+                                    return Err("'query' expects parameter name string".to_string());
+                                }
+                                let key = match &args[0] {
+                                    Value::Str(s) => s.as_str(),
+                                    _ => return Err("Query parameter name must be a string".to_string()),
+                                };
+                                let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                                heap.with_read(*id, |obj| {
+                                    if let Obj::Map(m) = obj {
+                                        if let Some(Value::ObjRef(q_id)) = m.get("query") {
+                                            if let Ok(Obj::Map(q_map)) = heap.get(*q_id) {
+                                                return Ok(q_map.get(key).cloned().unwrap_or(default_val));
+                                            }
+                                        }
+                                    }
+                                    Ok(default_val)
+                                })?
+                            }
+                        }
+                        "query_row" => {
+                            let db_id = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    if let Some(Value::Int(db_id)) = map.get("db_id") {
+                                        return Ok(*db_id as usize);
+                                    }
+                                }
+                                Err("Method 'query_row' only valid on database objects".to_string())
+                            })??;
+
+                            if args.is_empty() {
+                                return Err("'query_row' expects SQL query string".to_string());
+                            }
+                            let query = match &args[0] {
+                                Value::Str(s) => s.as_str(),
+                                _ => return Err("SQL query must be a string".to_string()),
+                            };
+                            let params = crate::stdlib::sql::convert_sql_args(args.get(1), heap);
+                            match crate::stdlib::sql::db_query_row_internal(db_id, query, params, heap) {
+                                Ok(row_val) => Ok(Value::Tuple(Arc::new(vec![row_val, Value::Nil]))),
+                                Err(e) => Ok(Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e))]))),
+                            }
+                        }
+                        "param" => {
+                            if args.is_empty() {
+                                return Err("'param' expects route parameter name string".to_string());
+                            }
+                            let key = match &args[0] {
+                                Value::Str(s) => s.as_str(),
+                                _ => return Err("Param name must be a string".to_string()),
+                            };
+                            let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                            heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(p_id)) = m.get("params") {
+                                        if let Ok(Obj::Map(p_map)) = heap.get(*p_id) {
+                                            return Ok(p_map.get(key).cloned().unwrap_or(default_val));
+                                        }
+                                    }
+                                }
+                                Ok(default_val)
+                            })?
+                        }
+                        "form" => {
+                            if args.is_empty() {
+                                let (existing_form_id, body_str) = heap.with_read(*id, |obj| {
+                                    if let Obj::Map(m) = obj {
+                                        let f_id = match m.get("form") {
+                                            Some(Value::ObjRef(id)) => Some(*id),
+                                            _ => None,
+                                        };
+                                        let b = match m.get("body") {
+                                            Some(Value::Str(s)) => Some(s.as_str().to_string()),
+                                            _ => None,
+                                        };
+                                        (f_id, b)
+                                    } else {
+                                        (None, None)
+                                    }
+                                })?;
+
+                                if let Some(f_id) = existing_form_id {
+                                    let is_empty = heap.with_read(f_id, |obj| {
+                                        if let Obj::Map(m) = obj { m.is_empty() } else { true }
+                                    }).unwrap_or(true);
+
+                                    if !is_empty {
+                                        return Ok(Value::ObjRef(f_id));
+                                    }
+
+                                    if let Some(body) = body_str {
+                                        if !body.is_empty() {
+                                            let parsed = crate::stdlib::http::parse_query_pairs(&body);
+                                            let _ = heap.with_write(f_id, |obj| {
+                                                if let Obj::Map(m) = obj {
+                                                    *m = parsed;
+                                                }
+                                                Ok::<(), String>(())
+                                            });
+                                        }
+                                    }
+                                    return Ok(Value::ObjRef(f_id));
+                                }
+                                return Ok(Value::Nil);
+                            }
+                            let key = match &args[0] {
+                                Value::Str(s) => s.as_str().to_string(),
+                                _ => return Err("Form field name must be a string".to_string()),
+                            };
+                            let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                            let val = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(f_id)) = m.get("form") {
+                                        if let Ok(Obj::Map(f_map)) = heap.get(*f_id) {
+                                            if let Some(v) = f_map.get(&key) {
+                                                return Some(v.clone());
+                                            }
+                                        }
+                                    }
+                                    if let Some(Value::Str(b)) = m.get("body") {
+                                        let parsed = crate::stdlib::http::parse_query_pairs(b.as_str());
+                                        if let Some(v) = parsed.get(&key) {
+                                            return Some(v.clone());
+                                        }
+                                    }
+                                }
+                                None
+                            })?;
+                            Ok(val.unwrap_or(default_val))
+                        }
+                        "form_value" => {
+                            if args.is_empty() {
+                                return Err("'form_value' expects field name string".to_string());
+                            }
+                            let key = match &args[0] {
+                                Value::Str(s) => s.as_str().to_string(),
+                                _ => return Err("Form field name must be a string".to_string()),
+                            };
+                            let default_val = args.get(1).cloned().unwrap_or(Value::Nil);
+                            let val = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(f_id)) = m.get("form") {
+                                        if let Ok(Obj::Map(f_map)) = heap.get(*f_id) {
+                                            if let Some(v) = f_map.get(&key) {
+                                                return Some(v.clone());
+                                            }
+                                        }
+                                    }
+                                    if let Some(Value::Str(b)) = m.get("body") {
+                                        let parsed = crate::stdlib::http::parse_query_pairs(b.as_str());
+                                        if let Some(v) = parsed.get(&key) {
+                                            return Some(v.clone());
+                                        }
+                                    }
+                                }
+                                None
+                            })?;
+                            Ok(val.unwrap_or(default_val))
+                        }
+                        "use" => {
+                            if args.is_empty() {
+                                return Err("'use' expects at least 1 middleware function".to_string());
+                            }
+                            heap.with_write(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    let mws_val = map.entry("middlewares".to_string()).or_insert_with(|| {
+                                        let list_id = heap.alloc(Obj::List(Vec::new()));
+                                        Value::ObjRef(list_id)
+                                    });
+                                    if let Value::ObjRef(list_id) = mws_val {
+                                        let list_id = *list_id;
+                                        heap.with_write(list_id, |l_obj| {
+                                            if let Obj::List(list) = l_obj {
+                                                for arg in &args {
+                                                    if let Value::ObjRef(arg_id) = arg {
+                                                        if let Ok(Obj::List(sub_list)) = heap.get(*arg_id) {
+                                                            list.extend(sub_list.clone());
+                                                            continue;
+                                                        }
+                                                    }
+                                                    list.push(arg.clone());
+                                                }
+                                                Ok(Value::Nil)
+                                            } else {
+                                                Err("Invalid middlewares list".to_string())
+                                            }
+                                        })?
+                                    } else {
+                                        Err("Invalid middlewares reference".to_string())
+                                    }
+                                } else {
+                                    Err("Expected map object".to_string())
+                                }
+                            })?
+                        }
+                        "group" => {
+                            if args.is_empty() {
+                                return Err("'group' expects prefix string argument".to_string());
+                            }
+                            let sub_prefix = match &args[0] {
+                                Value::Str(s) => s.as_str().to_string(),
+                                _ => return Err("Group prefix must be a string".to_string()),
+                            };
+
+                            let (root_id, full_prefix, inherited_mws) = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    let parent_id = match m.get("parent") {
+                                        Some(Value::ObjRef(p_id)) => *p_id,
+                                        _ => *id,
+                                    };
+                                    let prefix = match m.get("prefix") {
+                                        Some(Value::Str(p)) => {
+                                            let p1 = p.trim_end_matches('/');
+                                            let p2 = sub_prefix.trim_start_matches('/');
+                                            if p1.is_empty() {
+                                                format!("/{}", p2)
+                                            } else if p2.is_empty() {
+                                                p1.to_string()
+                                            } else {
+                                                format!("{}/{}", p1, p2)
+                                            }
+                                        }
+                                        _ => {
+                                            if sub_prefix.starts_with('/') {
+                                                sub_prefix.clone()
+                                            } else {
+                                                format!("/{}", sub_prefix)
+                                            }
+                                        }
+                                    };
+                                    let mut mws = Vec::new();
+                                    if let Some(Value::ObjRef(mws_id)) = m.get("middlewares") {
+                                        if let Ok(Obj::List(list)) = heap.get(*mws_id) {
+                                            mws = list.clone();
+                                        }
+                                    }
+                                    (parent_id, prefix, mws)
+                                } else {
+                                    (*id, sub_prefix.clone(), Vec::new())
+                                }
+                            })?;
+
+                            let mut grp_map = HashMap::new();
+                            grp_map.insert("prefix".to_string(), Value::Str(Arc::new(full_prefix)));
+                            grp_map.insert("parent".to_string(), Value::ObjRef(root_id));
+                            let mws_id = heap.alloc(Obj::List(inherited_mws));
+                            grp_map.insert("middlewares".to_string(), Value::ObjRef(mws_id));
+                            let grp_id = heap.alloc(Obj::Map(grp_map));
+                            Ok(Value::ObjRef(grp_id))
+                        }
+                        "not_found" => {
+                            if args.is_empty() {
+                                return Err("'not_found' expects a handler function".to_string());
+                            }
+                            let target_id = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(p_id)) = m.get("parent") {
+                                        *p_id
+                                    } else {
+                                        *id
+                                    }
+                                } else {
+                                    *id
+                                }
+                            })?;
+                            heap.with_write(target_id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.insert("not_found".to_string(), args[0].clone());
+                                    Ok(Value::Nil)
+                                } else {
+                                    Err("Expected map object".to_string())
+                                }
+                            })?
+                        }
+                        "method_not_allowed" => {
+                            if args.is_empty() {
+                                return Err("'method_not_allowed' expects a handler function".to_string());
+                            }
+                            let target_id = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(p_id)) = m.get("parent") {
+                                        *p_id
+                                    } else {
+                                        *id
+                                    }
+                                } else {
+                                    *id
+                                }
+                            })?;
+                            heap.with_write(target_id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.insert("method_not_allowed".to_string(), args[0].clone());
+                                    Ok(Value::Nil)
+                                } else {
+                                    Err("Expected map object".to_string())
+                                }
+                            })?
+                        }
+                        "static" => {
+                            if args.len() < 2 {
+                                return Err("'static' expects 2 arguments: (prefix: str, dir: str)".to_string());
+                            }
+                            register_static_route(*id, &args[0], &args[1], heap)
+                        }
                         "json" => {
                             let text_str = heap.with_read(*id, |obj| {
                                 if let Obj::Map(map) = obj {
@@ -334,6 +748,14 @@ impl Value {
                             }
                         }
                         "get" => {
+                            let is_router_like = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.contains_key("routes") || map.contains_key("parent")
+                                } else {
+                                    false
+                                }
+                            }).unwrap_or(false);
+
                             if args.len() == 1 {
                                 if let Value::Str(key) = &args[0] {
                                     heap.with_read(*id, |obj| {
@@ -347,9 +769,23 @@ impl Value {
                                     Err("Map key must be string".to_string())
                                 }
                             } else if args.len() >= 2 {
-                                register_router_route(*id, "GET", &args[0], &args[1], heap)
+                                if is_router_like {
+                                    register_router_route(*id, "GET", &args[0], &args[1], heap)
+                                } else {
+                                    if let Value::Str(key) = &args[0] {
+                                        heap.with_read(*id, |obj| {
+                                            if let Obj::Map(map) = obj {
+                                                Ok(map.get(&**key).cloned().unwrap_or_else(|| args[1].clone()))
+                                            } else {
+                                                unreachable!()
+                                            }
+                                        })?
+                                    } else {
+                                        Err("Map key must be string".to_string())
+                                    }
+                                }
                             } else {
-                                Err("'get' expects 1 argument (key: str) or 2 arguments (path: str, handler: func)".to_string())
+                                Err("'get' expects 1 argument (key: str) or 2 arguments (key: str, default: any)".to_string())
                             }
                         }
                         "post" => {
@@ -399,6 +835,54 @@ impl Value {
     }
 }
 
+fn find_root_router_and_path(
+    mut cur_id: usize,
+    raw_path: &str,
+    heap: &Heap,
+) -> Result<(usize, String, Vec<Value>), String> {
+    let mut parts = vec![raw_path.trim_matches('/').to_string()];
+    let mut all_mws = Vec::new();
+
+    loop {
+        let (parent_opt, prefix_opt, mws_opt) = heap.with_read(cur_id, |obj| {
+            if let Obj::Map(m) = obj {
+                let p = m.get("parent").and_then(|v| if let Value::ObjRef(id) = v { Some(*id) } else { None });
+                let pref = m.get("prefix").and_then(|v| if let Value::Str(s) = v { Some(s.as_str().to_string()) } else { None });
+                let mws = m.get("middlewares").and_then(|v| if let Value::ObjRef(id) = v { Some(*id) } else { None });
+                (p, pref, mws)
+            } else {
+                (None, None, None)
+            }
+        })?;
+
+        if let Some(mws_id) = mws_opt {
+            let mws = heap.with_read(mws_id, |obj| {
+                if let Obj::List(l) = obj { l.clone() } else { Vec::new() }
+            }).unwrap_or_default();
+            let mut combined = mws;
+            combined.extend(all_mws);
+            all_mws = combined;
+        }
+
+        if let Some(prefix) = prefix_opt {
+            let clean = prefix.trim_matches('/').to_string();
+            if !clean.is_empty() {
+                parts.insert(0, clean);
+            }
+        }
+
+        if let Some(parent_id) = parent_opt {
+            cur_id = parent_id;
+        } else {
+            break;
+        }
+    }
+
+    let joined = parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+    let full_path = format!("/{}", joined);
+    Ok((cur_id, full_path, all_mws))
+}
+
 fn register_router_route(
     router_id: usize,
     method: &str,
@@ -406,49 +890,132 @@ fn register_router_route(
     handler_val: &Value,
     heap: &Heap,
 ) -> Result<Value, String> {
-    let path = match path_val {
+    let raw_path = match path_val {
         Value::Str(s) => s.as_str().to_string(),
         _ => return Err("Route path must be a string".to_string()),
     };
 
-    heap.with_write(router_id, |obj| {
-        if let Obj::Map(map) = obj {
-            let routes_val = map.entry("routes".to_string()).or_insert_with(|| {
-                let r_id = heap.alloc(Obj::Map(std::collections::HashMap::new()));
-                Value::ObjRef(r_id)
-            });
-            let routes_id = match routes_val {
-                Value::ObjRef(id) => *id,
-                _ => return Err("Invalid router routes".to_string()),
-            };
+    let (root_id, full_path, group_mws) = find_root_router_and_path(router_id, &raw_path, heap)?;
 
-            let method_routes_id = heap.with_write(routes_id, |r_obj| {
-                if let Obj::Map(r_map) = r_obj {
-                    let m_val = r_map.entry(method.to_string()).or_insert_with(|| {
-                        let m_id = heap.alloc(Obj::Map(std::collections::HashMap::new()));
-                        Value::ObjRef(m_id)
-                    });
-                    match m_val {
-                        Value::ObjRef(id) => Ok(*id),
-                        _ => Err("Invalid method routes".to_string()),
-                    }
-                } else {
-                    Err("Invalid routes object".to_string())
-                }
-            })??;
-
-            heap.with_write(method_routes_id, |m_obj| {
-                if let Obj::Map(m_map) = m_obj {
-                    m_map.insert(path, handler_val.clone());
-                    Ok(Value::Nil)
-                } else {
-                    Err("Invalid method routes map".to_string())
-                }
-            })?
+    // Get or create routes map ID
+    let routes_id_opt = heap.with_read(root_id, |obj| {
+        if let Obj::Map(m) = obj {
+            m.get("routes").and_then(|v| if let Value::ObjRef(id) = v { Some(*id) } else { None })
         } else {
-            Err("Expected map object".to_string())
+            None
         }
-    })?
+    })?;
+
+    let routes_id = match routes_id_opt {
+        Some(id) => id,
+        None => {
+            let new_routes_id = heap.alloc(Obj::Map(HashMap::new()));
+            let _ = heap.with_write(root_id, |obj| {
+                if let Obj::Map(m) = obj {
+                    m.insert("routes".to_string(), Value::ObjRef(new_routes_id));
+                }
+            });
+            new_routes_id
+        }
+    };
+
+    // Get or create method routes map ID
+    let method_routes_id_opt = heap.with_read(routes_id, |obj| {
+        if let Obj::Map(m) = obj {
+            m.get(method).and_then(|v| if let Value::ObjRef(id) = v { Some(*id) } else { None })
+        } else {
+            None
+        }
+    })?;
+
+    let method_routes_id = match method_routes_id_opt {
+        Some(id) => id,
+        None => {
+            let new_m_id = heap.alloc(Obj::Map(HashMap::new()));
+            let _ = heap.with_write(routes_id, |obj| {
+                if let Obj::Map(m) = obj {
+                    m.insert(method.to_string(), Value::ObjRef(new_m_id));
+                }
+            });
+            new_m_id
+        }
+    };
+
+    // Insert route into method routes
+    let _ = heap.with_write(method_routes_id, |obj| {
+        if let Obj::Map(m) = obj {
+            m.insert(full_path.clone(), handler_val.clone());
+        }
+    });
+
+    // If group has middlewares, attach them to route_middlewares
+    if !group_mws.is_empty() {
+        let rmws_id_opt = heap.with_read(root_id, |obj| {
+            if let Obj::Map(m) = obj {
+                m.get("route_middlewares").and_then(|v| if let Value::ObjRef(id) = v { Some(*id) } else { None })
+            } else {
+                None
+            }
+        })?;
+
+        let rmws_id = match rmws_id_opt {
+            Some(id) => id,
+            None => {
+                let new_rm_id = heap.alloc(Obj::Map(HashMap::new()));
+                let _ = heap.with_write(root_id, |obj| {
+                    if let Obj::Map(m) = obj {
+                        m.insert("route_middlewares".to_string(), Value::ObjRef(new_rm_id));
+                    }
+                });
+                new_rm_id
+            }
+        };
+
+        let list_id = heap.alloc(Obj::List(group_mws));
+        let _ = heap.with_write(rmws_id, |obj| {
+            if let Obj::Map(m) = obj {
+                m.insert(full_path, Value::ObjRef(list_id));
+            }
+        });
+    }
+
+    Ok(Value::Nil)
+}
+
+fn register_static_route(
+    router_id: usize,
+    prefix_val: &Value,
+    dir_val: &Value,
+    heap: &Heap,
+) -> Result<Value, String> {
+    let prefix = match prefix_val {
+        Value::Str(s) => s.as_str().to_string(),
+        _ => return Err("Static prefix must be a string".to_string()),
+    };
+    let dir = match dir_val {
+        Value::Str(s) => s.as_str().to_string(),
+        _ => return Err("Static dir must be a string".to_string()),
+    };
+
+    let p = prefix.trim_end_matches('/');
+    let normalized = if p.starts_with('/') { p.to_string() } else { format!("/{}", p) };
+    let wildcard = format!("{}/*filepath", normalized);
+
+    let mut static_info = std::collections::HashMap::new();
+    static_info.insert("static_dir".to_string(), Value::Str(Arc::new(dir)));
+    static_info.insert("prefix".to_string(), Value::Str(Arc::new(normalized.clone())));
+    let static_id = heap.alloc(Obj::Map(static_info));
+    let static_val = Value::ObjRef(static_id);
+
+    register_router_route(router_id, "GET", &Value::Str(Arc::new(wildcard.clone())), &static_val, heap)?;
+    register_router_route(router_id, "HEAD", &Value::Str(Arc::new(wildcard)), &static_val, heap)?;
+
+    if !normalized.is_empty() && normalized != "/" {
+        register_router_route(router_id, "GET", &Value::Str(Arc::new(normalized.clone())), &static_val, heap)?;
+        register_router_route(router_id, "HEAD", &Value::Str(Arc::new(normalized)), &static_val, heap)?;
+    }
+
+    Ok(Value::Nil)
 }
 
 impl Value {

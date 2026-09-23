@@ -164,7 +164,7 @@ impl Backend {
                     if tokens[i].kind == TokenKind::Import && i + 1 < tokens.len() {
                         match &tokens[i + 1].kind {
                             TokenKind::Identifier(mod_name) => {
-                                if !["net", "fs", "time", "math", "json", "os", "sync", "requests", "http"].contains(&mod_name.as_str()) {
+                                if !["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql"].contains(&mod_name.as_str()) {
                                     let line_idx = tokens[i].line.saturating_sub(1);
                                     let line_str = lines.get(line_idx).unwrap_or(&"");
                                     let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
@@ -182,7 +182,7 @@ impl Backend {
                                         severity: Some(DiagnosticSeverity::WARNING),
                                         source: Some("whalli".to_string()),
                                         message: format!(
-                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync, requests, http (or use import \"./path.wh\")",
+                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync, requests, http, sql (or use import \"./path.wh\")",
                                             mod_name
                                         ),
                                         ..Default::default()
@@ -623,7 +623,7 @@ impl LanguageServer for Backend {
 
         // Do not allow renaming builtins or keywords
         let reserved = [
-            "net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "println", "print", "range", "new", "len",
+            "net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql", "println", "print", "range", "new", "len",
             "push", "pop", "keys", "remove", "int", "float", "str", "bool", "let",
             "func", "return", "if", "else", "while", "for", "in", "break", "continue",
             "import", "struct", "impl", "is", "interface", "wo", "defer", "true", "false", "nil",
@@ -833,7 +833,21 @@ impl LanguageServer for Backend {
                     items.push(create_snippet("json_response", "func http.json_response(status_code: int, data: any, headers: map = nil) -> str\nBuilds JSON HTTP response", "json_response(${1:200}, ${2:data})"));
                     items.push(create_snippet("text_response", "func http.text_response(status_code: int, text: str, headers: map = nil) -> str\nBuilds plain text HTTP response", "text_response(${1:200}, ${2:\"OK\"})"));
                     items.push(create_snippet("html_response", "func http.html_response(status_code: int, html: str, headers: map = nil) -> str\nBuilds HTML HTTP response", "html_response(${1:200}, ${2:\"<html></html>\"})"));
+                    items.push(create_snippet("file_response", "func http.file_response(base_dir: str, rel_path: str = \"\", headers: map = nil) -> str\nServes static files with MIME detection", "file_response(${1:\"public\"}, ${2:\"\"})"));
+                    items.push(create_snippet("redirect", "func http.redirect(url: str, code: int = 302, headers: map = nil) -> str\nBuilds HTTP redirect response", "redirect(${1:\"/\"}, ${2:302})"));
+                    items.push(create_snippet("error", "func http.error(code: int = 500, message: str = \"\") -> str\nBuilds plain text error response", "error(${1:500}, ${2:\"Internal Server Error\"})"));
+                    items.push(create_snippet("json_error", "func http.json_error(code: int = 500, message: str = \"\") -> str\nBuilds structured JSON error response", "json_error(${1:500}, ${2:\"Internal Server Error\"})"));
+                    items.push(create_snippet("set_cookie", "func http.set_cookie(name: str, value: str, opts: map = nil) -> str\nBuilds Set-Cookie header string", "set_cookie(${1:\"session\"}, ${2:\"val\"}, ${3:nil})"));
                     items.push(create_snippet("status_text", "func http.status_text(code: int) -> str\nReturns standard HTTP status text", "status_text(${1:200})"));
+                    items.push(create_snippet("allowed_methods", "func http.allowed_methods(router, path: str) -> list[str]\nReturns list of allowed HTTP methods for path", "allowed_methods(${1:router}, ${2:\"/api\"})"));
+                    items.push(create_snippet("cors", "func http.cors(options: map = nil) -> Middleware\nCORS middleware handling headers and preflight OPTIONS", "cors(${1:nil})"));
+                    items.push(create_snippet("logger", "func http.logger() -> Middleware\nStructured request logging middleware", "logger()"));
+                    items.push(create_snippet("secure_headers", "func http.secure_headers() -> Middleware\nSecurity headers middleware (X-Frame-Options, nosniff, CSP)", "secure_headers()"));
+                    items.push(create_snippet("request_id", "func http.request_id(header_name: str = \"X-Request-ID\") -> Middleware\nRequest ID tracing middleware", "request_id()"));
+                    items.push(create_snippet("rate_limiter", "func http.rate_limiter(max_reqs: int = 60, window_secs: int = 60) -> Middleware\nSliding window rate limiting middleware", "rate_limiter(${1:60}, ${2:60})"));
+                }
+                "sql" => {
+                    items.push(create_snippet("open", "func sql.open(driver: str, conn_str: str) -> (db: map, err: str | nil)\nOpens connection to SQL database (e.g. 'sqlite', 'postgres', 'mysql')", "open(${1:\"sqlite\"}, ${2:\":memory:\"})"));
                 }
                 _ => {
                     // Check if caller matches a known struct with methods
@@ -926,7 +940,7 @@ impl LanguageServer for Backend {
             }
 
             // Modules
-            for m in ["net", "fs", "time", "math", "json", "os", "sync", "requests", "http"] {
+            for m in ["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql"] {
                 items.push(CompletionItem {
                     label: m.to_string(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -1843,7 +1857,10 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
                 "### Module `requests`\nHigh-level HTTP/HTTPS client library in the style of Python requests.\n\n---\n\n### Examples\n```whalli\nimport requests\n\nlet resp = requests.get(\"https://httpbin.org/get\")\nif resp.ok {\n    println(\"Status:\", resp.status_code)\n    let json_data = resp.json()\n}\n```\n\n#### Members:\n- `get(url, options = nil) -> Response`: Send GET request\n- `post(url, options = nil) -> Response`: Send POST request\n- `put(url, options = nil) -> Response`: Send PUT request\n- `delete(url, options = nil) -> Response`: Send DELETE request\n- `patch(url, options = nil) -> Response`: Send PATCH request\n- `head(url, options = nil) -> Response`: Send HEAD request\n- `request(method, url, options = nil) -> Response`: Send request with custom method".to_string()
             }
             "http" => {
-                "### Module `http`\nHigh-performance server, backend, and RESTful API framework in the style of Go net/http.\n\n---\n\n### Examples\n```whalli\nimport http\n\nlet router = http.router()\nrouter.get(\"/api/hello\", func(req) {\n    return http.json_response(200, {\"message\": \"Hello from Whalli!\"})\n})\n\nhttp.listen_and_serve(\":8080\", router)\n```\n\n#### Members:\n- `listen_and_serve(addr, handler)`: Starts non-blocking HTTP server on `addr` (e.g. `\":8080\"`)\n- `router()`: Creates RESTful router supporting `.get()`, `.post()`, `.put()`, `.delete()`, `.patch()`\n- `parse_request(raw_str)`: Parses HTTP request into `req` map with `.json()` method\n- `response(code, headers, body)`: Formats HTTP response\n- `json_response(code, data, headers)`: Formats JSON HTTP response\n- `text_response(code, text, headers)`: Formats text HTTP response\n- `html_response(code, html, headers)`: Formats HTML HTTP response\n- `status_text(code)`: Returns standard status text string".to_string()
+                "### Module `http`\nHigh-performance server, backend, and RESTful API framework in the style of Go net/http.\n\n---\n\n### Examples\n```whalli\nimport http\n\nlet router = http.router()\nrouter.use(http.cors())\nrouter.use(http.logger())\n\nrouter.get(\"/api/hello\", func(req) {\n    return http.json_response(200, {\"message\": \"Hello from Whalli!\"})\n})\n\nhttp.listen_and_serve(\":8080\", router)\n```\n\n#### Members:\n- `listen_and_serve(addr, handler)`: Starts non-blocking HTTP server on `addr` with Keep-Alive\n- `router()`: Creates RESTful router supporting `.get()`, `.post()`, `.put()`, `.delete()`, `.use()`, `.group()`, `.static()`\n- `cors(options)`: CORS middleware with preflight handling\n- `logger()`: Request logger middleware\n- `secure_headers()`: Security headers middleware\n- `request_id(header_name)`: Request tracing middleware\n- `rate_limiter(max_req, window_sec)`: Rate limiting middleware\n- `parse_request(raw_str)`: Parses HTTP request into `req` map with `.json()`, `.header()`, `.cookie()`, `.query()`, `.param()`, `.form()`\n- `response(code, headers, body)`: Formats HTTP response\n- `json_response(code, data, headers)`: Formats JSON HTTP response\n- `text_response(code, text, headers)`: Formats text HTTP response\n- `html_response(code, html, headers)`: Formats HTML HTTP response\n- `file_response(base_dir, rel_path, headers)`: Serves static file with MIME detection\n- `redirect(url, code = 302, headers)`: Builds HTTP redirect\n- `error(code, msg)`: Builds plain text error response\n- `json_error(code, msg)`: Builds structured JSON error response\n- `set_cookie(name, val, opts)`: Builds Set-Cookie string\n- `status_text(code)`: Returns standard status text string".to_string()
+            }
+            "sql" => {
+                "### Module `sql`\nSQL Database client for SQLite, PostgreSQL, and MySQL.\n\n---\n\n### Examples\n```whalli\nimport sql\n\n// SQLite\nlet (db, err) = sql.open(\"sqlite\", \"app.db\")\n\n// PostgreSQL\nlet (db2, err) = sql.open(\"postgres\", \"postgresql://user:pass@localhost:5432/mydb\")\n\n// MySQL\nlet (db3, err) = sql.open(\"mysql\", \"mysql://user:pass@localhost:3306/mydb\")\n\ndb.exec(\"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)\")\ndb.exec(\"INSERT INTO users (name) VALUES (?)\", [\"Alice\"])\n\nlet (rows, _) = db.query(\"SELECT * FROM users WHERE id > ?\", [0])\nlet (user, _) = db.query_row(\"SELECT * FROM users WHERE id = ?\", [1])\ndb.close()\n```\n\n#### Members:\n- `open(driver, conn_str) -> (db, err)`: Opens connection to database (sqlite, postgres, mysql)".to_string()
             }
             _ => {
                 if let Some(f) = index.functions.iter().find(|f| f.name == word) {
