@@ -7,11 +7,15 @@ hero:
   image:
     file: ../../assets/whalli.png
   actions:
-    - text: Get Started
-      link: /intro/
-      icon: right-arrow
+    - text: Read the Book
+      link: /whalli/intro/
+      icon: open-book
       variant: primary
-    - text: View on GitHub
+    - text: Quick Start
+      link: /whalli/quick-start/
+      icon: right-arrow
+      variant: secondary
+    - text: GitHub
       link: https://github.com/kempedron/whalli
       icon: external
       variant: minimal
@@ -19,9 +23,48 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
+## The Whalli Book
+
+Explore the official guide and documentation chapters:
+
+<CardGrid>
+  <Card title="1. Introduction" icon="open-book">
+    Design goals, features, and core philosophy.
+    [Read Introduction &rarr;](/whalli/intro/)
+  </Card>
+  <Card title="2. Quick Start" icon="rocket">
+    Installation, Cargo build, running scripts, and environment options.
+    [Get Started &rarr;](/whalli/quick-start/)
+  </Card>
+  <Card title="3. Language Tour" icon="document">
+    Variables, types, functions, pattern matching, structs, and interfaces.
+    [Explore Language &rarr;](/whalli/language-tour/)
+  </Card>
+  <Card title="4. Concurrency" icon="seti:graphql">
+    Woroutines (`wo`), channels (`chan`), synchronization (`sync`), and `select`.
+    [Learn Concurrency &rarr;](/whalli/concurrency/)
+  </Card>
+  <Card title="5. I/O and HTTP Backend" icon="laptop">
+    Modern HTTP server with Keep-Alive, REST router, and built-in middleware.
+    [Build Backend &rarr;](/whalli/io-net/)
+  </Card>
+  <Card title="6. Standard Library & SQL" icon="setting">
+    Unified SQL (SQLite, Postgres, MySQL), JSON, FS, OS, Time, Math.
+    [Browse Stdlib &rarr;](/whalli/stdlib/)
+  </Card>
+  <Card title="7. Toolchain & VM" icon="puzzle">
+    Bytecode compiler pipeline, stack machine, heap, and mark-and-sweep GC.
+    [Under the Hood &rarr;](/whalli/toolchain/)
+  </Card>
+  <Card title="8. Tooling & IDE" icon="pencil">
+    Official VS Code extension and standalone `whalli-lsp` server.
+    [Setup Tooling &rarr;](/whalli/tooling/)
+  </Card>
+</CardGrid>
+
 ## Why Whalli?
 
-<CardGrid stagger>
+<CardGrid>
   <Card title="Woroutines & Channels" icon="rocket">
     Lightweight cooperative multitasking with `wo` and `chan` — thousands of concurrent tasks on a fixed thread pool.
   </Card>

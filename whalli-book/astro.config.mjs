@@ -20,9 +20,6 @@ export default defineConfig({
 			},
 			favicon: '/favicon.svg',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/kempedron/whalli' }],
-			editLink: {
-				baseUrl: 'https://github.com/kempedron/whalli/edit/main/whalli-book/',
-			},
 			customCss: [
 				'@fontsource/inter/400.css',
 				'@fontsource/inter/600.css',
