@@ -15,11 +15,11 @@ pub(crate) fn value_to_json(val: &Value, heap: &Heap) -> serde_json::Value {
             let arr: Vec<serde_json::Value> = elements.iter().map(|e| value_to_json(e, heap)).collect();
             serde_json::Value::Array(arr)
         }
-        Value::Range(start, end, step) => {
+        Value::Range(r) => {
             serde_json::json!({
-                "start": start,
-                "end": end,
-                "step": step
+                "start": r.0,
+                "end": r.1,
+                "step": r.2
             })
         }
         Value::ObjRef(id) => {

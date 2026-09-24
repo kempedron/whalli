@@ -30,12 +30,12 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(Arc<String>),
-    Type(String),
+    Type(Arc<String>),
     Function(Arc<FunctionObj>),
     Native(fn(Vec<Value>, &mut crate::vm::VM) -> NativeResult),
     ObjRef(usize),
     Tuple(Arc<Vec<Value>>),
-    Range(i64, i64, i64),
+    Range(Arc<(i64, i64, i64)>),
 }
 
 impl PartialEq for Value {
@@ -50,7 +50,7 @@ impl PartialEq for Value {
             (Value::Function(a), Value::Function(b)) => Arc::ptr_eq(a, b),
             (Value::ObjRef(a), Value::ObjRef(b)) => a == b,
             (Value::Native(a), Value::Native(b)) => (*a as usize) == (*b as usize),
-            (Value::Range(s1, e1, st1), Value::Range(s2, e2, st2)) => s1 == s2 && e1 == e2 && st1 == st2,
+            (Value::Range(r1), Value::Range(r2)) => r1 == r2,
             _ => false,
         }
     }
@@ -72,7 +72,7 @@ impl std::fmt::Display for Value {
                 let items: Vec<String> = elements.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "({})", items.join(", "))
             }
-            Value::Range(s, e, step) => write!(f, "range({}, {}, {})", s, e, step),
+            Value::Range(r) => write!(f, "range({}, {}, {})", r.0, r.1, r.2),
         }
     }
 }
@@ -1029,7 +1029,7 @@ impl Value {
             Value::Type(t) => format!("<type {}>", t),
             Value::Function(func) => format!("<func {}>", func.name),
             Value::Native(_) => "<native>".to_string(),
-            Value::Range(s, e, step) => format!("range({}, {}, {})", s, e, step),
+            Value::Range(r) => format!("range({}, {}, {})", r.0, r.1, r.2),
             Value::Tuple(elements) => {
                 let items: Vec<String> = elements.iter().map(|e| e.stringify(heap)).collect();
                 format!("({})", items.join(", "))

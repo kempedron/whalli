@@ -50,6 +50,10 @@ pub enum Obj {
     TaskHandle {
         status: TaskStatus,
     },
+    String(Arc<String>),
+    Tuple(Arc<Vec<Value>>),
+    Range(i64, i64, i64),
+    Type(String),
 }
 
 pub struct HeapSlot {
@@ -78,11 +82,6 @@ pub struct Heap {
 fn push_value_refs(val: &Value, worklist: &mut Vec<usize>) {
     match val {
         Value::ObjRef(id) => worklist.push(*id),
-        Value::Tuple(elements) => {
-            for elem in elements.iter() {
-                push_value_refs(elem, worklist);
-            }
-        }
         _ => {}
     }
 }
@@ -227,6 +226,14 @@ impl Heap {
                         push_value_refs(val, &mut worklist);
                     }
                 }
+                Obj::Tuple(elements) => {
+                    for val in elements.iter() {
+                        push_value_refs(val, &mut worklist);
+                    }
+                }
+                Obj::String(_) => {}
+                Obj::Range(..) => {}
+                Obj::Type(_) => {}
                 Obj::WaitGroup { .. } => {}
                 Obj::Mutex { .. } => {}
                 Obj::Interface(_) => {}

@@ -171,7 +171,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
                 1 => {
                     // range(end) -> 0..end, step=1
                     if let Value::Int(end) = args[0] {
-                        NativeResult::Return(Value::Range(0, end, 1))
+                        NativeResult::Return(Value::Range(Arc::new((0, end, 1))))
                     } else {
                         NativeResult::Return(Value::Nil)
                     }
@@ -179,7 +179,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
                 2 => {
                     // range(start, end)
                     if let (Value::Int(start), Value::Int(end)) = (&args[0], &args[1]) {
-                        NativeResult::Return(Value::Range(*start, *end, 1))
+                        NativeResult::Return(Value::Range(Arc::new((*start, *end, 1))))
                     } else {
                         NativeResult::Return(Value::Nil)
                     }
@@ -188,7 +188,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
                     // range(start, end, step)
                     if let (Value::Int(start), Value::Int(end), Value::Int(step)) = (&args[0], &args[1], &args[2]) {
                         if *step == 0 { return NativeResult::Return(Value::Nil); }
-                        NativeResult::Return(Value::Range(*start, *end, *step))
+                        NativeResult::Return(Value::Range(Arc::new((*start, *end, *step))))
                     } else {
                         NativeResult::Return(Value::Nil)
                     }

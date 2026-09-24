@@ -330,7 +330,7 @@ impl VM {
         for builtin in builtins {
             globals.insert(
                 builtin.to_string(),
-                Value::Type(builtin.to_string()),
+                Value::Type(Arc::new(builtin.to_string())),
             );
         }
 
@@ -2261,7 +2261,8 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                     _ => fail!("TypeError: object is not iterable"),
                                 }
                             }
-                            Value::Range(start, end, step) => {
+                            Value::Range(r) => {
+                                let (start, end, step) = (r.0, r.1, r.2);
                                 let current_val = start + (current_idx * step);
                                 let has_next = if step > 0 { current_val < end } else { current_val > end };
                                 if has_next {
