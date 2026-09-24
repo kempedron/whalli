@@ -78,6 +78,19 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     );
 
     globals.insert(
+        "bytes".to_string(),
+        Value::Native(|args, _vm| {
+            let val = match args.first() {
+                Some(Value::Bytes(b)) => Value::Bytes(b.clone()),
+                Some(Value::Str(s)) => Value::Bytes(Arc::new(s.as_bytes().to_vec())),
+                Some(Value::Int(n)) => Value::Bytes(Arc::new(vec![(*n & 0xFF) as u8])),
+                _ => Value::Bytes(Arc::new(Vec::new())),
+            };
+            NativeResult::Return(val)
+        }),
+    );
+
+    globals.insert(
         "bool".to_string(),
         Value::Native(|args, _vm| {
             let val = match args.first() {

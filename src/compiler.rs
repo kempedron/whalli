@@ -167,7 +167,7 @@ impl Compiler {
                         depth,
                     });
                 } else {
-                    self.emit(OpCode::StoreGlobal(name.clone()));
+                    self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
                 }
             }
 
@@ -188,12 +188,12 @@ impl Compiler {
                 for (i, (param_name, param_type)) in params.iter().enumerate() {
                     if let Some(t) = param_type {
                         self.emit(OpCode::LoadLocal(i));
-                        self.emit(OpCode::LoadGlobal(t.clone()));
+                        self.emit(OpCode::LoadGlobal(Arc::new(t.clone())));
                         self.emit(OpCode::CheckIs);
-                        self.emit(OpCode::Assert(format!(
+                        self.emit(OpCode::Assert(Arc::new(format!(
                             "TypeError: param {} must implement {}",
                             param_name, t
-                        )));
+                        ))));
                     }
                 }
 
@@ -215,10 +215,10 @@ impl Compiler {
                     }
                 }
 
-                        let func_value = Arc::new(state.function);
+                let func_value = Arc::new(state.function);
 
-                self.emit(OpCode::Closure(func_value, upvalue_locs));
-                self.emit(OpCode::StoreGlobal(name.clone()));
+                self.emit(OpCode::Closure(func_value, Arc::new(upvalue_locs)));
+                self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
             }
 
             Stmt::Return(expr) => {
@@ -358,7 +358,7 @@ impl Compiler {
                 } else if let Some(upvalue_idx) = self.resolve_upvalue(current_idx, name) {
                     self.emit(OpCode::SetUpvalue(upvalue_idx));
                 } else {
-                    self.emit(OpCode::StoreGlobal(name.clone()));
+                    self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
                 }
             }
             Stmt::IndexAssign(array, index, value) => {
@@ -422,20 +422,20 @@ impl Compiler {
                 self.emit(OpCode::SetLine(*line));
             }
             Stmt::Import(name) => {
-                self.emit(OpCode::Import(name.clone()));
+                self.emit(OpCode::Import(Arc::new(name.clone())));
             }
             Stmt::ImportFile(path) => {
-                self.emit(OpCode::ImportFile(path.clone()));
+                self.emit(OpCode::ImportFile(Arc::new(path.clone())));
             }
             Stmt::Struct(name, fields) => {
                 let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
 
-                self.emit(OpCode::BuildStruct(name.clone(), field_names));
-                self.emit(OpCode::StoreGlobal(name.clone()));
+                self.emit(OpCode::BuildStruct(Arc::new(name.clone()), Arc::new(field_names)));
+                self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
             }
 
             Stmt::Impl(target_name, methods) => {
-                self.emit(OpCode::LoadGlobal(target_name.clone()));
+                self.emit(OpCode::LoadGlobal(Arc::new(target_name.clone())));
 
                 for method in methods {
                     if let Stmt::Functions(name, params, return_type, body) = method {
@@ -456,12 +456,12 @@ impl Compiler {
                         for (i, (param_name, param_type)) in params.iter().enumerate() {
                             if let Some(t) = param_type {
                                 self.emit(OpCode::LoadLocal(i));
-                                self.emit(OpCode::LoadGlobal(t.clone()));
+                                self.emit(OpCode::LoadGlobal(Arc::new(t.clone())));
                                 self.emit(OpCode::CheckIs);
-                                self.emit(OpCode::Assert(format!(
+                                self.emit(OpCode::Assert(Arc::new(format!(
                                     "TypeError: param {} must implement {}",
                                     param_name, t
-                                )));
+                                ))));
                             }
                         }
 
@@ -483,17 +483,17 @@ impl Compiler {
                             }
                         }
 
-                let func_value = Arc::new(state.function);
-                        self.emit(OpCode::Closure(func_value, upvalue_locs));
+                        let func_value = Arc::new(state.function);
+                        self.emit(OpCode::Closure(func_value, Arc::new(upvalue_locs)));
 
-                        self.emit(OpCode::AddMethod(name.clone()));
+                        self.emit(OpCode::AddMethod(Arc::new(name.clone())));
                     }
                 }
                 self.emit(OpCode::Pop);
             }
             Stmt::Interface(name, methods) => {
-                self.emit(OpCode::BuildInterface(methods.clone()));
-                self.emit(OpCode::StoreGlobal(name.clone()));
+                self.emit(OpCode::BuildInterface(Arc::new(methods.clone())));
+                self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
             }
             Stmt::LetTuple(names, expr) => {
                 self.compile_expr(expr);
@@ -511,7 +511,7 @@ impl Compiler {
                     }
                 } else {
                     for name in names.iter().rev() {
-                        self.emit(OpCode::StoreGlobal(name.clone()));
+                        self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
                     }
                 }
             }
@@ -536,7 +536,7 @@ impl Compiler {
                     for arg in args {
                         self.compile_expr(arg);
                     }
-                    self.emit(OpCode::DeferMethodCall(method_name.clone(), args.len()));
+                    self.emit(OpCode::DeferMethodCall(Arc::new(method_name.clone()), args.len()));
                 }
                 _ => unreachable!(),
             },
@@ -578,7 +578,7 @@ impl Compiler {
                 } else if let Some(upvalue_idx) = self.resolve_upvalue(current_idx, name) {
                     self.emit(OpCode::GetUpvalue(upvalue_idx));
                 } else {
-                    self.emit(OpCode::LoadGlobal(name.clone()));
+                    self.emit(OpCode::LoadGlobal(Arc::new(name.clone())));
                 }
             }
             Expr::Call(callee, args) => {
@@ -593,7 +593,7 @@ impl Compiler {
                 for arg in args {
                     self.compile_expr(arg);
                 }
-                self.emit(OpCode::MethodCall(method_name.clone(), args.len()));
+                self.emit(OpCode::MethodCall(Arc::new(method_name.clone()), args.len()));
             }
             Expr::List(elements) => {
                 let len = elements.len();
@@ -688,7 +688,7 @@ impl Compiler {
 
         // Emit Select opcode (it consumes channel/value arguments and leaves exactly:
         // [val_slot, idx_slot]
-        self.emit(OpCode::Select(case_ops));
+        self.emit(OpCode::Select(Arc::new(case_ops)));
 
         let current_depth = self.current_state().scope_depth + 1;
         let val_slot = self.current_state().locals.len();
@@ -907,7 +907,7 @@ impl Compiler {
             }
             Pattern::Type(_, type_name) => {
                 self.emit(OpCode::LoadLocal(subj_slot));
-                self.emit(OpCode::LoadGlobal(type_name.clone()));
+                self.emit(OpCode::LoadGlobal(Arc::new(type_name.clone())));
                 self.emit(OpCode::CheckIs);
             }
             Pattern::Tuple(elements) => {

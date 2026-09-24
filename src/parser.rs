@@ -601,6 +601,7 @@ impl Parser {
         let token = self.advance().clone();
         let mut expr = match token {
             TokenKind::Str(s) => Expr::Literal(Value::Str(Arc::new(s))),
+            TokenKind::Bytes(b) => Expr::Literal(Value::Bytes(Arc::new(b))),
             TokenKind::FStr(s) => self.parse_interpolated_string(&s)?,
             TokenKind::Int(n) => Expr::Literal(Value::Int(n)),
             TokenKind::Float(n) => Expr::Literal(Value::Float(n)),
@@ -909,6 +910,7 @@ impl Parser {
             }
             TokenKind::Float(f) => Ok(Pattern::Literal(Value::Float(f))),
             TokenKind::Str(s) => Ok(Pattern::Literal(Value::Str(Arc::new(s)))),
+            TokenKind::Bytes(b) => Ok(Pattern::Literal(Value::Bytes(Arc::new(b)))),
             TokenKind::True => Ok(Pattern::Literal(Value::Bool(true))),
             TokenKind::False => Ok(Pattern::Literal(Value::Bool(false))),
             TokenKind::Nil => Ok(Pattern::Literal(Value::Nil)),

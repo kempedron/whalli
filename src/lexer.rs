@@ -24,6 +24,7 @@ pub enum TokenKind {
     True,
     False,
     Str(String),
+    Bytes(Vec<u8>),
     FStr(String),
     Identifier(String),
     Function,
@@ -278,6 +279,61 @@ impl Lexer {
                 '|' => {
                     tokens.push(self.make_token(TokenKind::Pipe));
                     self.pos += 1;
+                }
+                'b' => {
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
+                        self.pos += 2;
+                        let mut bytes = Vec::new();
+                        while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+                            let ch = self.chars[self.pos];
+                            if ch == '\\' {
+                                self.pos += 1;
+                                if self.pos < self.chars.len() {
+                                    match self.chars[self.pos] {
+                                        'n' => bytes.push(b'\n'),
+                                        'r' => bytes.push(b'\r'),
+                                        't' => bytes.push(b'\t'),
+                                        '0' => bytes.push(0),
+                                        '\\' => bytes.push(b'\\'),
+                                        '"' => bytes.push(b'"'),
+                                        'x' => {
+                                            if self.pos + 2 < self.chars.len() {
+                                                let h1 = self.chars[self.pos + 1];
+                                                let h2 = self.chars[self.pos + 2];
+                                                let hex_str: String = [h1, h2].iter().collect();
+                                                if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
+                                                    bytes.push(byte_val);
+                                                    self.pos += 2;
+                                                } else {
+                                                    bytes.push(b'x');
+                                                }
+                                            } else {
+                                                bytes.push(b'x');
+                                            }
+                                        }
+                                        other => {
+                                            let mut buf = [0; 4];
+                                            for b in other.encode_utf8(&mut buf).bytes() {
+                                                bytes.push(b);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                let mut buf = [0; 4];
+                                for b in ch.encode_utf8(&mut buf).bytes() {
+                                    bytes.push(b);
+                                }
+                            }
+                            self.pos += 1;
+                        }
+                        self.pos += 1; // skip closing "
+                        tokens.push(self.make_token(TokenKind::Bytes(bytes)));
+                    } else {
+                        let word = self.read_word();
+                        let kind = Self::ident_or_keyword(word);
+                        tokens.push(self.make_token(kind));
+                    }
                 }
                 'f' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {

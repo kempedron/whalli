@@ -82,6 +82,7 @@ impl SqliteToSql for SqlParam {
             Value::Int(i) => Ok(ToSqlOutput::from(*i)),
             Value::Float(f) => Ok(ToSqlOutput::from(*f)),
             Value::Str(s) => Ok(ToSqlOutput::from(s.as_str())),
+            Value::Bytes(b) => Ok(ToSqlOutput::from(b.as_slice())),
             other => Ok(ToSqlOutput::from(format!("{}", other))),
         }
     }

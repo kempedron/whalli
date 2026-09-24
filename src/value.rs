@@ -30,6 +30,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(Arc<String>),
+    Bytes(Arc<Vec<u8>>),
     Type(Arc<String>),
     Function(Arc<FunctionObj>),
     Native(fn(Vec<Value>, &mut crate::vm::VM) -> NativeResult),
@@ -46,6 +47,7 @@ impl PartialEq for Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (Value::Type(a), Value::Type(b)) => a == b,
             (Value::Function(a), Value::Function(b)) => Arc::ptr_eq(a, b),
             (Value::ObjRef(a), Value::ObjRef(b)) => a == b,
@@ -64,6 +66,10 @@ impl std::fmt::Display for Value {
             Value::Float(n) => write!(f, "{}", n),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Str(s) => write!(f, "{}", s),
+            Value::Bytes(b) => {
+                let hex_parts: Vec<String> = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+                write!(f, "b\"{}\"", hex_parts.join(""))
+            }
             Value::Type(t) => write!(f, "<type {}>", t),
             Value::Function(func) => write!(f, "<func {}>", func.name),
             Value::Native(_) => write!(f, "<native>"),
@@ -85,6 +91,7 @@ impl Value {
             (Value::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
             (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal),
             (Value::Str(a), Value::Str(b)) => a.cmp(b),
+            (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
             _ => std::cmp::Ordering::Equal,
         }
@@ -163,6 +170,41 @@ impl Value {
                     }
                 }
                 _ => Err(format!("Method '{}' not found on string", method_name)),
+            },
+            Value::Bytes(bytes) => match method_name {
+                "len" => Ok(Value::Int(bytes.len() as i64)),
+                "hex" => {
+                    let hex_str: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                    Ok(Value::Str(Arc::new(hex_str)))
+                }
+                "to_str" | "decode" => {
+                    match std::str::from_utf8(bytes) {
+                        Ok(s) => Ok(Value::Tuple(Arc::new(vec![Value::Str(Arc::new(s.to_string())), Value::Nil]))),
+                        Err(e) => Ok(Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new(e.to_string()))]))),
+                    }
+                }
+                "slice" => {
+                    if args.len() < 1 || args.len() > 2 {
+                        return Err("'slice' expects 1 or 2 arguments (start, [end])".to_string());
+                    }
+                    let start = match &args[0] {
+                        Value::Int(n) => (*n).max(0) as usize,
+                        _ => return Err("'slice' expects integer start index".to_string()),
+                    };
+                    let end = if args.len() > 1 {
+                        match &args[1] {
+                            Value::Int(n) => (*n).max(0) as usize,
+                            _ => return Err("'slice' expects integer end index".to_string()),
+                        }
+                    } else {
+                        bytes.len()
+                    };
+                    let start_clamped = start.min(bytes.len());
+                    let end_clamped = end.min(bytes.len()).max(start_clamped);
+                    let sub = bytes[start_clamped..end_clamped].to_vec();
+                    Ok(Value::Bytes(Arc::new(sub)))
+                }
+                _ => Err(format!("Method '{}' not found on bytes", method_name)),
             },
             Value::Tuple(elements) => match method_name {
                 "len" => Ok(Value::Int(elements.len() as i64)),
@@ -1026,6 +1068,10 @@ impl Value {
             Value::Int(n) => n.to_string(),
             Value::Float(n) => n.to_string(),
             Value::Str(s) => s.to_string(),
+            Value::Bytes(b) => {
+                let hex_parts: Vec<String> = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+                format!("b\"{}\"", hex_parts.join(""))
+            }
             Value::Type(t) => format!("<type {}>", t),
             Value::Function(func) => format!("<func {}>", func.name),
             Value::Native(_) => "<native>".to_string(),

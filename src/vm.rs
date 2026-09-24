@@ -197,6 +197,7 @@ fn is_type_match(heap: &heap::Heap, globals: &HashMap<String, Value>, obj: &Valu
             (Value::Int(_), "int") => true,
             (Value::Float(_), "float") => true,
             (Value::Str(_), "str") => true,
+            (Value::Bytes(_), "bytes") => true,
             (Value::Bool(_), "bool") => true,
             (Value::ObjRef(id), "list") => {
                 heap.with_read(*id, |o| matches!(o, crate::heap::Obj::List(_))).unwrap_or(false)
@@ -326,7 +327,7 @@ impl VM {
         };
 
         let (mut globals, modules) = crate::stdlib::register_natives(&mut vm);
-        let builtins = ["int", "float", "str", "bool", "list", "map", "func", "chan"];
+        let builtins = ["int", "float", "str", "bytes", "bool", "list", "map", "func", "chan"];
         for builtin in builtins {
             globals.insert(
                 builtin.to_string(),
@@ -859,11 +860,16 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Add => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x + y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x + y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) + y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) + y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (*y as f64))),
+                    (Value::Bytes(x), Value::Bytes(y)) => {
+                        let mut combined: Vec<u8> = (*x).to_vec();
+                        combined.extend_from_slice(y.as_slice());
+                        current_task.stack.push(Value::Bytes(Arc::new(combined)));
+                    }
                     (Value::Str(x), Value::Str(y)) => current_task.stack.push(Value::Str(Arc::new(format!("{}{}", x, y)))),
                     (Value::Str(x), y) => {
                         let y_str = y.stringify(&shared.heap);
@@ -879,38 +885,38 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Sub => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x - y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x - y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) - y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) - y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (*y as f64))),
                     _ => fail!("Invalid types for '-' operation"),
                 }
             }
             OpCode::Mul => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x * y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x * y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) * y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) * y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (*y as f64))),
                     _ => fail!("Invalid types for '*' operation"),
                 }
             }
             OpCode::Div => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Division by zero"); }
+                        if *y == 0 { fail!("Division by zero"); }
                         current_task.stack.push(Value::Int(x / y));
                     }
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x / y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) / y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) / y)),
                     (Value::Float(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Division by zero"); }
-                        current_task.stack.push(Value::Float(x / (y as f64)));
+                        if *y == 0 { fail!("Division by zero"); }
+                        current_task.stack.push(Value::Float(x / (*y as f64)));
                     }
                     _ => fail!("Invalid types for '/' operation"),
                 }
@@ -918,26 +924,26 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Mod => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Modulo by zero"); }
+                        if *y == 0 { fail!("Modulo by zero"); }
                         current_task.stack.push(Value::Int(x % y));
                     }
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x % y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) % y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) % y)),
                     (Value::Float(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Modulo by zero"); }
-                        current_task.stack.push(Value::Float(x % (y as f64)));
+                        if *y == 0 { fail!("Modulo by zero"); }
+                        current_task.stack.push(Value::Float(x % (*y as f64)));
                     }
                     _ => fail!("Invalid types for '%' operation"),
                 }
             }
             OpCode::StoreGlobal(name) => {
                 let val = pop!();
-                shared.globals.write().insert(name, val);
+                shared.globals.write().insert(name.as_str().to_string(), val);
             }
             OpCode::LoadGlobal(name) => {
-                if let Some(val) = shared.globals.read().get(&name).cloned() {
+                if let Some(val) = shared.globals.read().get(name.as_str()).cloned() {
                     current_task.stack.push(val);
                 } else {
                     fail!("Undefined variable '{}'", name);
@@ -1069,7 +1075,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         if is_inst {
                             let method_val = shared.heap.with_read(struct_id, |s_obj| {
                                 if let heap::Obj::StructDef { methods, .. } = s_obj {
-                                    methods.get(&method_name).cloned()
+                                    methods.get(method_name.as_str()).cloned()
                                 } else {
                                     None
                                 }
@@ -1103,7 +1109,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             // Map property call
                             let map_val = shared.heap.with_read(*id, |m_obj| {
                                 if let heap::Obj::Map(map) = m_obj {
-                                    map.get(&method_name).cloned()
+                                    map.get(method_name.as_str()).cloned()
                                 } else {
                                     None
                                 }
@@ -1191,7 +1197,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         let sync_result = shared.heap.with_write(*id, |obj_ref| {
                             match obj_ref {
                                 crate::heap::Obj::Channel { closed, .. } => {
-                                    if method_name == "close" {
+                                    if method_name.as_str() == "close" {
                                         *closed = true;
                                         return Some(1); // Channel closed
                                     }
@@ -1380,7 +1386,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                 }
 
                 if !handled {
-                    match obj.call_method(&method_name, args, &shared.heap) {
+                    match obj.call_method(method_name.as_str(), args, &shared.heap) {
                         Ok(result) => current_task.stack.push(result),
                         Err(err_msg) => fail!("{}", err_msg),
                     }
@@ -1405,11 +1411,11 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             if let Ok(l) = len {
                                 current_task.stack.push(Value::Int(l as i64));
                             } else {
-                                fail!("Attempt to get length of a non-list");
+                                fail!("Expected list");
                             }
                         }
                     } else {
-                        fail!("Attempt to get length of a non-list");
+                        fail!("Expected list");
                     }
                 }
                 OpCode::BuildMap(size) => {
@@ -1471,6 +1477,17 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                 fail!("String index must be integer");
                             }
                         }
+                        Value::Bytes(b) => {
+                            if let Value::Int(idx) = index {
+                                if idx < 0 || idx >= b.len() as i64 {
+                                    fail!("Bytes index out of bounds");
+                                }
+                                let byte_val = b[idx as usize] as i64;
+                                current_task.stack.push(Value::Int(byte_val));
+                            } else {
+                                fail!("Bytes index must be integer");
+                            }
+                        }
                         Value::Tuple(elements) => {
                             if let Value::Int(idx) = index {
                                 if idx < 0 || (idx as usize) >= elements.len() {
@@ -1527,14 +1544,14 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                     }
                 }
                 OpCode::Import(module_name) => {
-                    if let Some(module_val) = shared.modules.read().get(&module_name).cloned() {
-                        shared.globals.write().insert(module_name.clone(), module_val);
+                    if let Some(module_val) = shared.modules.read().get(module_name.as_str()).cloned() {
+                        shared.globals.write().insert(module_name.as_str().to_string(), module_val);
                     } else {
                         fail!("Module '{}' not found", module_name);
                     }
                 }
                 OpCode::ImportFile(path_str) => {
-                    let path = Path::new(&path_str);
+                    let path = Path::new(path_str.as_str());
                     let resolved = if path.is_relative() {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
                     } else {
@@ -1571,7 +1588,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         let bytecode = compiler.compile(&ast);
 
                         let imported_func = Arc::new(FunctionObj {
-                            name: path_str.clone(),
+                            name: path_str.as_str().to_string(),
                             arity: 0,
                             chunk: bytecode,
                             param_types: vec![],
@@ -1606,7 +1623,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                     }
                     args.reverse();
                     let obj = pop!();
-                    current_task.frames[frame_idx].defers.push(DeferredCall::MethodCall(obj, method_name, args));
+                    current_task.frames[frame_idx].defers.push(DeferredCall::MethodCall(obj, method_name.as_str().to_string(), args));
                 }
                 OpCode::Return => {
                     if let Some(deferred) = current_task.frames[frame_idx].defers.pop() {
@@ -1826,7 +1843,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                 }
                 OpCode::Closure(func, upvalues) => {
                     let mut captured = Vec::new();
-                    for loc in upvalues {
+                    for loc in upvalues.iter() {
                         match loc {
                             UpvalueLoc::Local(idx) => {
                                 let offset = current_task.frames[frame_idx].stack_offset;
@@ -1838,7 +1855,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                 let current_closure_id = current_task.frames[frame_idx].closure_id;
                                 if let Ok(upvs) = shared.heap.with_read(current_closure_id, |o| {
                                     if let heap::Obj::Closure(_, u) = o {
-                                        Some(u[idx])
+                                        Some(u[*idx])
                                     } else {
                                         None
                                     }
@@ -1850,7 +1867,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             }
                         }
                     }
-                    let closure_id = shared.heap.alloc(heap::Obj::Closure(func, captured));
+                    let closure_id = shared.heap.alloc(heap::Obj::Closure(func.clone(), captured));
                     current_task.stack.push(Value::ObjRef(closure_id));
                 }
                 OpCode::GetUpvalue(idx) => {
@@ -1898,8 +1915,8 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                 }
                 OpCode::BuildStruct(name, fields) => {
                     let id = shared.heap.alloc(heap::Obj::StructDef {
-                        name,
-                        fields,
+                        name: name.as_str().to_string(),
+                        fields: fields.as_ref().clone(),
                         methods: HashMap::new(),
                     });
                     current_task.stack.push(Value::ObjRef(id));
@@ -1910,13 +1927,13 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                     if let Value::ObjRef(id) = struct_val {
                         let _ = shared.heap.with_write(id, |o| {
                             if let heap::Obj::StructDef { methods, .. } = o {
-                                methods.insert(name, method);
+                                methods.insert(name.as_str().to_string(), method);
                             }
                         });
                     }
                 }
                 OpCode::BuildInterface(methods) => {
-                    let id = shared.heap.alloc(heap::Obj::Interface(methods));
+                    let id = shared.heap.alloc(heap::Obj::Interface(methods.as_ref().clone()));
                     current_task.stack.push(Value::ObjRef(id));
                 }
                 OpCode::CheckIs => {
@@ -2324,7 +2341,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                     use crate::opcode::SelectCaseOp;
 
                     let mut total_args = 0;
-                    for c in &cases {
+                    for c in cases.iter() {
                         match c {
                             SelectCaseOp::Recv => total_args += 1,
                             SelectCaseOp::Send => total_args += 2,
