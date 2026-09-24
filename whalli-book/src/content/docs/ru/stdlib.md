@@ -35,8 +35,11 @@ db.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
 db.exec("INSERT INTO users (name) VALUES (?)", ["Alice"])
 
 let (rows, _) = db.query("SELECT * FROM users")
-for u in rows {
+let i = 0
+while i < rows.len() {
+    let u = rows[i]
     println(u["id"], u["name"])
+    i += 1
 }
 db.close()
 ```
