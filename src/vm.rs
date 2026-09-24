@@ -860,11 +860,11 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Add => {
                 let b = pop!();
                 let a = pop!();
-                match (&a, &b) {
+                match (a, b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x + y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x + y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) + y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (*y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) + y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (y as f64))),
                     (Value::Bytes(x), Value::Bytes(y)) => {
                         let mut combined: Vec<u8> = (*x).to_vec();
                         combined.extend_from_slice(y.as_slice());
@@ -885,38 +885,38 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Sub => {
                 let b = pop!();
                 let a = pop!();
-                match (&a, &b) {
+                match (a, b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x - y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x - y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) - y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (*y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) - y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (y as f64))),
                     _ => fail!("Invalid types for '-' operation"),
                 }
             }
             OpCode::Mul => {
                 let b = pop!();
                 let a = pop!();
-                match (&a, &b) {
+                match (a, b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x * y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x * y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) * y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (*y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) * y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (y as f64))),
                     _ => fail!("Invalid types for '*' operation"),
                 }
             }
             OpCode::Div => {
                 let b = pop!();
                 let a = pop!();
-                match (&a, &b) {
+                match (a, b) {
                     (Value::Int(x), Value::Int(y)) => {
-                        if *y == 0 { fail!("Division by zero"); }
+                        if y == 0 { fail!("Division by zero"); }
                         current_task.stack.push(Value::Int(x / y));
                     }
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x / y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) / y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) / y)),
                     (Value::Float(x), Value::Int(y)) => {
-                        if *y == 0 { fail!("Division by zero"); }
-                        current_task.stack.push(Value::Float(x / (*y as f64)));
+                        if y == 0 { fail!("Division by zero"); }
+                        current_task.stack.push(Value::Float(x / (y as f64)));
                     }
                     _ => fail!("Invalid types for '/' operation"),
                 }
@@ -924,16 +924,16 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Mod => {
                 let b = pop!();
                 let a = pop!();
-                match (&a, &b) {
+                match (a, b) {
                     (Value::Int(x), Value::Int(y)) => {
-                        if *y == 0 { fail!("Modulo by zero"); }
+                        if y == 0 { fail!("Modulo by zero"); }
                         current_task.stack.push(Value::Int(x % y));
                     }
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x % y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) % y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) % y)),
                     (Value::Float(x), Value::Int(y)) => {
-                        if *y == 0 { fail!("Modulo by zero"); }
-                        current_task.stack.push(Value::Float(x % (*y as f64)));
+                        if y == 0 { fail!("Modulo by zero"); }
+                        current_task.stack.push(Value::Float(x % (y as f64)));
                     }
                     _ => fail!("Invalid types for '%' operation"),
                 }
