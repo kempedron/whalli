@@ -1,0 +1,101 @@
+---
+title: Whalli
+description: Современный легковесный язык программирования с ворутинами, Keep-Alive HTTP бэкендом и встроенным SQL.
+template: splash
+hero:
+  tagline: Современный язык программирования с нативной кооперативной многозадачностью, неблокирующим вводом-выводом и батарейками для бэкенда.
+  image:
+    file: ../../../assets/whalli.png
+  actions:
+    - text: Читать книгу
+      link: /whalli/ru/intro/
+      icon: open-book
+      variant: primary
+    - text: Быстрый старт
+      link: /whalli/ru/quick-start/
+      icon: right-arrow
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/kempedron/whalli
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Книга Whalli
+
+Изучите официальное руководство и документацию по языку:
+
+<CardGrid>
+  <Card title="1. Введение" icon="open-book">
+    Философия дизайна, ключевые особенности и цели языка.
+    [Читать введение &rarr;](/whalli/ru/intro/)
+  </Card>
+  <Card title="2. Быстрый старт" icon="rocket">
+    Установка, сборка через Cargo, запуск первого скрипта и переменные окружения.
+    [Начать работу &rarr;](/whalli/ru/quick-start/)
+  </Card>
+  <Card title="3. Обзор языка" icon="document">
+    Переменные, типы данных, функции, сопоставление с образцом (match), структуры и интерфейсы.
+    [Изучить язык &rarr;](/whalli/ru/language-tour/)
+  </Card>
+  <Card title="4. Конкурентность" icon="seti:graphql">
+    Ворутины (`wo`), каналы (`chan`), примитивы синхронизации (`sync`) и `select`.
+    [Освоить ворутины &rarr;](/whalli/ru/concurrency/)
+  </Card>
+  <Card title="5. Ввод-вывод и HTTP бэкенд" icon="laptop">
+    Современный HTTP-сервер уровня `net/http` с Keep-Alive, REST-роутером и встроенными middleware.
+    [Создать бэкенд &rarr;](/whalli/ru/io-net/)
+  </Card>
+  <Card title="6. Стандартная библиотека и SQL" icon="setting">
+    Единый интерфейс SQL (SQLite, Postgres, MySQL), модули JSON, FS, OS, Time, Math.
+    [Обзор модулей &rarr;](/whalli/ru/stdlib/)
+  </Card>
+  <Card title="7. Архитектура и VM" icon="puzzle">
+    Байткод-компилятор, стек-машина, куча и сборщик мусора mark-and-sweep.
+    [Под капотом &rarr;](/whalli/ru/toolchain/)
+  </Card>
+  <Card title="8. Инструменты и IDE" icon="pencil">
+    Официальное расширение для VS Code и сервер `whalli-lsp`.
+    [Настроить IDE &rarr;](/whalli/ru/tooling/)
+  </Card>
+</CardGrid>
+
+## Почему Whalli?
+
+<CardGrid>
+  <Card title="Ворутины и каналы" icon="rocket">
+    Кооперативная многозадачность с `wo` и `chan` — тысячи параллельных задач на фиксированном пуле потоков.
+  </Card>
+  <Card title="Современный HTTP бэкенд" icon="laptop">
+    Фреймворк уровня Go `net/http`: REST-маршрутизация, middleware, Keep-Alive, статические файлы — полностью самодостаточен.
+  </Card>
+  <Card title="Единый SQL интерфейс" icon="document">
+    Один API для SQLite (встроенный), PostgreSQL и MySQL — `sql.open`, `db.exec`, `db.query` с автотрансляцией параметров.
+  </Card>
+  <Card title="Батарейки в комплекте" icon="star">
+    Продакшн-уровень LSP, плагин для VS Code, неблокирующий `mio` ввод-вывод и богатая стандартная библиотека.
+  </Card>
+</CardGrid>
+
+## Пример — REST API со SQLite
+
+```whalli
+import http
+import sql
+
+let (db, _) = sql.open("sqlite", "app.db")
+db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT)")
+
+let router = http.router()
+router.use(http.cors())
+router.use(http.logger())
+
+router.get("/api/tasks", func(req) {
+    let (rows, _) = db.query("SELECT * FROM tasks")
+    return http.json_response(200, rows)
+})
+
+http.listen_and_serve(":8888", router)
+```

@@ -14,11 +14,22 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Whalli',
+			defaultLocale: 'root',
+			locales: {
+				root: {
+					label: 'English',
+					lang: 'en',
+				},
+				ru: {
+					label: 'Русский',
+					lang: 'ru',
+				},
+			},
 			description: 'Lightweight modern language with woroutines, Keep-Alive HTTP & SQL — learn Whalli from scratch.',
 			logo: {
 				src: './src/assets/whalli.png',
 			},
-			favicon: '/favicon.svg',
+			favicon: '/favicon.ico',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/kempedron/whalli' }],
 			customCss: [
 				'@fontsource/inter/400.css',
@@ -36,6 +47,9 @@ export default defineConfig({
 			sidebar: [
 				{
 					label: 'The Whalli Book',
+					translations: {
+						ru: 'Книга Whalli',
+					},
 					items: [
 						{ label: '1. Introduction', slug: 'intro' },
 						{ label: '2. Quick Start', slug: 'quick-start' },
@@ -51,8 +65,16 @@ export default defineConfig({
 			],
 			head: [
 				{
+					tag: 'link',
+					attrs: { rel: 'icon', type: 'image/x-icon', href: '/whalli/favicon.ico' },
+				},
+				{
+					tag: 'link',
+					attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/whalli/favicon.png' },
+				},
+				{
 					tag: 'meta',
-					attrs: { property: 'og:image', content: 'https://whalli.is-a.dev/whalli.png' },
+					attrs: { property: 'og:image', content: 'https://kempedron.github.io/whalli/whalli.png' },
 				},
 				{
 					tag: 'meta',
