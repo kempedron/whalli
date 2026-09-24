@@ -9,8 +9,8 @@ const whalliGrammar = JSON.parse(
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://kempedron.github.io',
-	base: '/whalli',
+	site: 'https://whalli.is-a.dev',
+	base: '/',
 	integrations: [
 		starlight({
 			title: 'Whalli',
@@ -66,15 +66,15 @@ export default defineConfig({
 			head: [
 				{
 					tag: 'link',
-					attrs: { rel: 'icon', type: 'image/x-icon', href: '/whalli/favicon.ico' },
+					attrs: { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
 				},
 				{
 					tag: 'link',
-					attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/whalli/favicon.png' },
+					attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/favicon.png' },
 				},
 				{
 					tag: 'meta',
-					attrs: { property: 'og:image', content: 'https://kempedron.github.io/whalli/whalli.png' },
+					attrs: { property: 'og:image', content: 'https://whalli.is-a.dev/whalli.png' },
 				},
 				{
 					tag: 'meta',
