@@ -5,13 +5,13 @@ use whalli::value::Value;
 #[test]
 fn test_multi_file_import() {
     let math_utils = r#"
-    func add(a: int, b: int) -> int {
+    pub func add(a: int, b: int) -> int {
         return a + b
     }
-    func multiply(a: int, b: int) -> int {
+    pub func multiply(a: int, b: int) -> int {
         return a * b
     }
-    struct Point {
+    pub struct Point {
         x: int,
         y: int,
     }
@@ -21,9 +21,9 @@ fn test_multi_file_import() {
     let main_code = r#"
     import "/tmp/test_math_utils_fixture.wh"
 
-    let sum = add(10, 20)
-    let prod = multiply(5, 6)
-    let p = Point(1, 2)
+    let sum = test_math_utils_fixture.add(10, 20)
+    let prod = test_math_utils_fixture.multiply(5, 6)
+    let p = test_math_utils_fixture.Point(1, 2)
     "#;
     let vm = run_code(main_code);
     let sum_val = vm.globals.get("sum").expect("sum should exist");

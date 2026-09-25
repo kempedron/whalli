@@ -7,7 +7,7 @@ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -79,6 +79,7 @@ struct SharedRuntime {
     globals: RwLock<HashMap<String, Value>>,
     modules: RwLock<HashMap<String, Value>>,
     imported_files: Mutex<HashSet<PathBuf>>,
+    loaded_modules: RwLock<HashMap<PathBuf, Value>>,
 
     injector: Injector<Task>,
     condvar: Condvar,
@@ -361,6 +362,7 @@ impl VM {
             globals: RwLock::new(std::mem::take(&mut self.globals)),
             modules: RwLock::new(std::mem::take(&mut self.modules)),
             imported_files: Mutex::new(std::mem::take(&mut self.imported_files)),
+            loaded_modules: RwLock::new(HashMap::new()),
             injector: Injector::new(),
             condvar: Condvar::new(),
             condvar_mutex: Mutex::new(()),
@@ -565,6 +567,12 @@ impl VM {
         self.modules = modules;
         self.imported_files = imported;
         self.gc_threshold = shared.gc_threshold.load(Ordering::Relaxed);
+
+        if let Some(main_task) = shared.injector.steal().success() {
+            if let Some(top_val) = main_task.stack.last() {
+                self.globals.insert("$$module_result$$".to_string(), top_val.clone());
+            }
+        }
 
         if let Ok(arc_heap) = Arc::try_unwrap(shared) {
             self.heap = arc_heap.heap;
@@ -1118,7 +1126,7 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             let is_callable = match &map_val {
                                 Some(Value::Native(_)) => true,
                                 Some(Value::ObjRef(cid)) => {
-                                    matches!(shared.heap.get(*cid), Ok(heap::Obj::Closure(_, _)))
+                                    matches!(shared.heap.get(*cid), Ok(heap::Obj::Closure(_, _)) | Ok(heap::Obj::StructDef { .. }))
                                 }
                                 _ => false,
                             };
@@ -1171,10 +1179,11 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                         }
                                     }
                                     Value::ObjRef(cid) => {
-                                        if let Ok(heap::Obj::Closure(func, _)) = shared.heap.get(cid) {
-                                            if func.arity != arg_count {
-                                                fail!("Wrong arity");
-                                            }
+                                        match shared.heap.get(cid) {
+                                            Ok(heap::Obj::Closure(func, _)) => {
+                                                if func.arity != arg_count {
+                                                    fail!("Wrong arity for function '{}': expected {}, got {}", func.name, func.arity, arg_count);
+                                                }
                                                 let new_frame = CallFrame {
                                                     closure_id: cid,
                                                     function: func.clone(),
@@ -1183,7 +1192,31 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                                     base_offset: callee_index,
                                                     defers: Vec::new(),
                                                 };
-                                            current_task.frames.push(new_frame);
+                                                current_task.frames.push(new_frame);
+                                            }
+                                            Ok(heap::Obj::StructDef { name, fields, .. }) => {
+                                                if fields.len() != arg_count {
+                                                    fail!("Struct '{}' expects {} arguments, got {}", name, fields.len(), arg_count);
+                                                }
+                                                let mut instance_fields = HashMap::new();
+                                                let mut s_args = Vec::with_capacity(arg_count);
+                                                for _ in 0..arg_count {
+                                                    s_args.push(pop!());
+                                                }
+                                                s_args.reverse();
+                                                pop!(); // callee
+
+                                                for (i, field_name) in fields.iter().enumerate() {
+                                                    instance_fields.insert(field_name.clone(), s_args[i].clone());
+                                                }
+
+                                                let instance_id = shared.heap.alloc(heap::Obj::Instance {
+                                                    struct_id: cid,
+                                                    fields: instance_fields,
+                                                });
+                                                current_task.stack.push(Value::ObjRef(instance_id));
+                                            }
+                                            _ => fail!("Property is not callable"),
                                         }
                                     }
                                     _ => fail!("Property is not callable"),
@@ -1543,30 +1576,48 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         _ => fail!("Invalid target for assignment (only lists and maps are mutable)"),
                     }
                 }
-                OpCode::Import(module_name) => {
-                    if let Some(module_val) = shared.modules.read().get(module_name.as_str()).cloned() {
-                        shared.globals.write().insert(module_name.as_str().to_string(), module_val);
+                OpCode::Import { name, alias } => {
+                    if let Some(module_val) = shared.modules.read().get(name.as_str()).cloned() {
+                        shared.globals.write().insert(alias.as_str().to_string(), module_val);
                     } else {
-                        fail!("Module '{}' not found", module_name);
+                        fail!("Module '{}' not found", name);
                     }
                 }
-                OpCode::ImportFile(path_str) => {
-                    let path = Path::new(path_str.as_str());
+                OpCode::ImportFile { path: path_str, alias } => {
+                    let path = PathBuf::from(path_str.as_str());
                     let resolved = if path.is_relative() {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&path)
                     } else {
-                        path.to_path_buf()
+                        path.clone()
                     };
 
-                    let canonical = match resolved.canonicalize() {
+                    let target_file = if resolved.is_dir() {
+                        let mod_file = resolved.join("mod.wh");
+                        if !mod_file.exists() {
+                            fail!("Cannot find module entry 'mod.wh' in directory '{}'", path_str);
+                        }
+                        mod_file
+                    } else if resolved.exists() {
+                        resolved
+                    } else {
+                        let with_ext = resolved.with_extension("wh");
+                        if with_ext.exists() {
+                            with_ext
+                        } else {
+                            fail!("Cannot import file '{}': File does not exist", path_str);
+                        }
+                    };
+
+                    let canonical = match target_file.canonicalize() {
                         Ok(c) => c,
                         Err(e) => fail!("Cannot import file '{}': {}", path_str, e),
                     };
 
-                    let mut files = shared.imported_files.lock();
-                    if !files.contains(&canonical) {
-                        files.insert(canonical.clone());
-
+                    // Check module cache first
+                    let cached_val = shared.loaded_modules.read().get(&canonical).cloned();
+                    if let Some(mod_val) = cached_val {
+                        shared.globals.write().insert(alias.as_str().to_string(), mod_val);
+                    } else {
                         let source = match std::fs::read_to_string(&canonical) {
                             Ok(s) => s,
                             Err(e) => fail!("Cannot read import file '{}': {}", path_str, e),
@@ -1584,28 +1635,63 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             Err(e) => fail!("Syntax error in import: {}", e.message),
                         };
 
-                        let compiler = crate::compiler::Compiler::new();
+                        let compiler = crate::compiler::Compiler::new_module(alias.as_str().to_string());
                         let bytecode = compiler.compile(&ast);
 
-                        let imported_func = Arc::new(FunctionObj {
-                            name: path_str.as_str().to_string(),
-                            arity: 0,
-                            chunk: bytecode,
-                            param_types: vec![],
-                            return_type: None,
-                        });
+                        let mut module_vm = VM::new(bytecode);
+                        // Share the same runtime heap and modules
+                        module_vm.heap = shared.heap.clone();
+                        module_vm.modules = shared.modules.read().clone();
+                        module_vm.net = Arc::clone(&shared.net);
+                        module_vm.channel_timers = Arc::clone(&shared.channel_timers);
 
-                        let closure_id = shared.heap.alloc(heap::Obj::Closure(imported_func.clone(), vec![]));
-                        let base_offset = current_task.stack.len();
-                        current_task.frames.push(CallFrame {
-                            closure_id,
-                            function: imported_func,
-                            ip: 0,
-                            stack_offset: base_offset,
-                            base_offset,
-                            defers: Vec::new(),
-                        });
+                        // Execute module to get the exported Map
+                        if let Err(err) = module_vm.run() {
+                            fail!("Error evaluating module '{}': {}", path_str, err.message);
+                        }
+
+                        // Copy all globals created by the module into caller's shared globals
+                        // so that exported functions can access their module-level private variables!
+                        {
+                            let mut current_globals = shared.globals.write();
+                            for (k, v) in &module_vm.globals {
+                                if k != "$$module_result$$" && k != alias.as_str() {
+                                    current_globals.insert(k.clone(), v.clone());
+                                }
+                            }
+                        }
+
+                        // Module return value is left on stack or stored
+                        let module_obj = module_vm.globals.get("$$module_result$$")
+                            .or_else(|| module_vm.globals.get(alias.as_str()))
+                            .cloned()
+                            .unwrap_or(Value::Nil);
+                        shared.loaded_modules.write().insert(canonical, module_obj.clone());
+                        shared.globals.write().insert(alias.as_str().to_string(), module_obj);
                     }
+                }
+                OpCode::Export(name) => {
+                    // Look up variable in globals or locals
+                    let val = shared.globals.read().get(name.as_str()).cloned().unwrap_or(Value::Nil);
+                    current_task.stack.push(Value::Str(name.clone()));
+                    current_task.stack.push(val);
+                }
+                OpCode::BuildModule(export_count) => {
+                    let mut exports_map = HashMap::with_capacity(export_count);
+                    for _ in 0..export_count {
+                        let val = pop!();
+                        let key = pop!();
+                        if let Value::Str(k) = key {
+                            exports_map.insert((*k).clone(), val);
+                        }
+                    }
+                    let id = shared.heap.alloc(heap::Obj::Map(exports_map));
+                    let mod_val = Value::ObjRef(id);
+                    // Store module in globals under its module name so caller gets it
+                    let mod_name = current_task.frames[frame_idx].function.name.clone();
+                    shared.globals.write().insert(mod_name.clone(), mod_val.clone());
+                    shared.globals.write().insert("$$module_result$$".to_string(), mod_val.clone());
+                    current_task.stack.push(mod_val);
                 }
                 OpCode::DeferCall(arg_count) => {
                     let mut args = Vec::with_capacity(arg_count);

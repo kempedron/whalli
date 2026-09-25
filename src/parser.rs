@@ -75,49 +75,32 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token(TokenKind::Pub) {
+            if self.match_token(TokenKind::Function) {
+                return self.parse_function(true);
+            }
+            if self.match_token(TokenKind::Struct) {
+                return self.parse_struct(true);
+            }
+            if self.match_token(TokenKind::Interface) {
+                return self.parse_interface(true);
+            }
+            if self.match_token(TokenKind::Let) {
+                return self.parse_let(true);
+            }
+            return Err(self.error("Expected function, struct, interface, or variable declaration after 'pub'"));
+        }
+
         if self.check_token(TokenKind::LBrace) {
             return Ok(Stmt::Block(self.parse_block()?));
         }
 
         if self.match_token(TokenKind::Function) {
-            return self.parse_function();
+            return self.parse_function(false);
         }
 
         if self.match_token(TokenKind::Struct) {
-            let name_token = self.advance().clone();
-            let struct_name = match name_token {
-                TokenKind::Identifier(n) => n,
-                _ => Err(self.error("Expected struct name"))?,
-            };
-
-            self.consume(TokenKind::LBrace, "Expected '{' after struct name")?;
-
-            let mut fields = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                while self.match_token(TokenKind::NewLine) {}
-                if self.check_token(TokenKind::RBrace) {
-                    break;
-                }
-
-                let field_token = self.advance().clone();
-                let field_name = match field_token {
-                    TokenKind::Identifier(n) => n,
-                    _ => Err(self.error("Expected field name"))?,
-                };
-                self.consume(TokenKind::Colon, "Expected ':' after field name")?;
-
-                let token_type = self.advance().clone();
-                let type_name = match token_type {
-                    TokenKind::Identifier(n) => n,
-                    _ => Err(self.error("Expected type name"))?,
-                };
-
-                fields.push((field_name, type_name));
-
-                while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after struct body")?;
-            return Ok(Stmt::Struct(struct_name, fields));
+            return self.parse_struct(false);
         }
 
         if self.match_token(TokenKind::Impl) {
@@ -136,7 +119,7 @@ impl Parser {
                 }
 
                 if self.match_token(TokenKind::Function) {
-                    methods.push(self.parse_function()?);
+                    methods.push(self.parse_function(false)?);
                 } else {
                     return Err(self.error("Only functions are allowed inside 'impl' blocks"));
                 }
@@ -146,71 +129,11 @@ impl Parser {
         }
 
         if self.match_token(TokenKind::Interface) {
-            let name_token = self.advance().clone();
-            let interface_name = match name_token {
-                TokenKind::Identifier(n) => n,
-                _ => return Err(self.error("Expected interface name")),
-            };
-            self.consume(TokenKind::LBrace, "Expected '{' after interface name")?;
-
-            let mut methods = Vec::new();
-            while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
-                while self.match_token(TokenKind::NewLine) {}
-                if self.check_token(TokenKind::RBrace) {
-                    break;
-                }
-
-                self.consume(TokenKind::Function, "Expected 'func' in interface body")?;
-
-                let method_token = self.advance().clone();
-                match method_token {
-                    TokenKind::Identifier(n) => methods.push(n),
-                    _ => return Err(self.error("Expected method name in interface")),
-                }
-
-                if self.match_token(TokenKind::LParen) {
-                    self.consume(TokenKind::RParen, "Expected ')' after '(' in interface")?;
-                }
-
-                while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
-            }
-            self.consume(TokenKind::RBrace, "Expected '}' after interface body")?;
-            return Ok(Stmt::Interface(interface_name, methods));
+            return self.parse_interface(false);
         }
 
         if self.match_token(TokenKind::Let) {
-            if self.match_token(TokenKind::LParen) {
-                let mut names = Vec::new();
-                if !self.check_token(TokenKind::RParen) {
-                    loop {
-                        let name_token = self.advance().clone();
-                        match name_token {
-                            TokenKind::Identifier(n) => names.push(n),
-                            _ => {
-                                return Err(
-                                    self.error("Expected variable name in tuple destructuring")
-                                );
-                            }
-                        }
-                        if !self.match_token(TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                }
-                self.consume(TokenKind::RParen, "Expected ')' after tuple variables")?;
-                self.consume(TokenKind::Assign, "Expected '=' after tuple variables")?;
-                let expr = self.parse_expression()?;
-                return Ok(Stmt::LetTuple(names, expr));
-            } else {
-                let name_token = self.advance().clone();
-                let name = match name_token {
-                    TokenKind::Identifier(n) => n,
-                    _ => return Err(self.error("Expect variable name")),
-                };
-                self.consume(TokenKind::Assign, "Expect '=' after variable name")?;
-                let expr = self.parse_expression()?;
-                return Ok(Stmt::Let(name, expr));
-            }
+            return self.parse_let(false);
         }
 
         if self.match_token(TokenKind::Return) {
@@ -269,15 +192,33 @@ impl Parser {
         if self.match_token(TokenKind::Import) {
             let name_token = self.advance().clone();
             match name_token {
-                // import "./path/to/file.wh"  — local file import
+                // import "./path/to/file.wh" [as alias]
                 TokenKind::Str(path) => {
+                    let alias = if self.match_token(TokenKind::As) {
+                        let alias_token = self.advance().clone();
+                        match alias_token {
+                            TokenKind::Identifier(a) => Some(a),
+                            _ => return Err(self.error("Expected identifier after 'as' in import")),
+                        }
+                    } else {
+                        None
+                    };
                     self.consume_stmt_end()?;
-                    return Ok(Stmt::ImportFile(path));
+                    return Ok(Stmt::ImportFile { path, alias });
                 }
-                // import net  — stdlib module import
+                // import net [as alias]
                 TokenKind::Identifier(n) => {
+                    let alias = if self.match_token(TokenKind::As) {
+                        let alias_token = self.advance().clone();
+                        match alias_token {
+                            TokenKind::Identifier(a) => Some(a),
+                            _ => return Err(self.error("Expected identifier after 'as' in import")),
+                        }
+                    } else {
+                        None
+                    };
                     self.consume_stmt_end()?;
-                    return Ok(Stmt::Import(n));
+                    return Ok(Stmt::Import { name: n, alias });
                 }
                 _ => return Err(self.error("Expected module name or file path string after 'import'")),
             }
@@ -369,7 +310,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_function(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_function(&mut self, is_pub: bool) -> Result<Stmt, ParseError> {
         let name_token = self.advance().clone();
         let name = match name_token {
             TokenKind::Identifier(n) => n,
@@ -406,7 +347,112 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(Stmt::Functions(name, params, return_type, body))
+        Ok(Stmt::Functions(name, params, return_type, body, is_pub))
+    }
+
+    fn parse_struct(&mut self, is_pub: bool) -> Result<Stmt, ParseError> {
+        let name_token = self.advance().clone();
+        let struct_name = match name_token {
+            TokenKind::Identifier(n) => n,
+            _ => Err(self.error("Expected struct name"))?,
+        };
+
+        self.consume(TokenKind::LBrace, "Expected '{' after struct name")?;
+
+        let mut fields = Vec::new();
+        while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+            while self.match_token(TokenKind::NewLine) {}
+            if self.check_token(TokenKind::RBrace) {
+                break;
+            }
+
+            let field_token = self.advance().clone();
+            let field_name = match field_token {
+                TokenKind::Identifier(n) => n,
+                _ => Err(self.error("Expected field name"))?,
+            };
+            self.consume(TokenKind::Colon, "Expected ':' after field name")?;
+
+            let token_type = self.advance().clone();
+            let type_name = match token_type {
+                TokenKind::Identifier(n) => n,
+                _ => Err(self.error("Expected type name"))?,
+            };
+
+            fields.push((field_name, type_name));
+
+            while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
+        }
+        self.consume(TokenKind::RBrace, "Expected '}' after struct body")?;
+        Ok(Stmt::Struct(struct_name, fields, is_pub))
+    }
+
+    fn parse_interface(&mut self, is_pub: bool) -> Result<Stmt, ParseError> {
+        let name_token = self.advance().clone();
+        let interface_name = match name_token {
+            TokenKind::Identifier(n) => n,
+            _ => return Err(self.error("Expected interface name")),
+        };
+        self.consume(TokenKind::LBrace, "Expected '{' after interface name")?;
+
+        let mut methods = Vec::new();
+        while !self.check_token(TokenKind::RBrace) && !self.is_at_end() {
+            while self.match_token(TokenKind::NewLine) {}
+            if self.check_token(TokenKind::RBrace) {
+                break;
+            }
+
+            self.consume(TokenKind::Function, "Expected 'func' in interface body")?;
+
+            let method_token = self.advance().clone();
+            match method_token {
+                TokenKind::Identifier(n) => methods.push(n),
+                _ => return Err(self.error("Expected method name in interface")),
+            }
+
+            if self.match_token(TokenKind::LParen) {
+                self.consume(TokenKind::RParen, "Expected ')' after '(' in interface")?;
+            }
+
+            while self.match_token(TokenKind::NewLine) || self.match_token(TokenKind::Comma) {}
+        }
+        self.consume(TokenKind::RBrace, "Expected '}' after interface body")?;
+        Ok(Stmt::Interface(interface_name, methods, is_pub))
+    }
+
+    fn parse_let(&mut self, is_pub: bool) -> Result<Stmt, ParseError> {
+        if self.match_token(TokenKind::LParen) {
+            let mut names = Vec::new();
+            if !self.check_token(TokenKind::RParen) {
+                loop {
+                    let name_token = self.advance().clone();
+                    match name_token {
+                        TokenKind::Identifier(n) => names.push(n),
+                        _ => {
+                            return Err(
+                                self.error("Expected variable name in tuple destructuring")
+                            );
+                        }
+                    }
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.consume(TokenKind::RParen, "Expected ')' after tuple variables")?;
+            self.consume(TokenKind::Assign, "Expected '=' after tuple variables")?;
+            let expr = self.parse_expression()?;
+            return Ok(Stmt::LetTuple(names, expr));
+        } else {
+            let name_token = self.advance().clone();
+            let name = match name_token {
+                TokenKind::Identifier(n) => n,
+                _ => return Err(self.error("Expect variable name")),
+            };
+            self.consume(TokenKind::Assign, "Expect '=' after variable name")?;
+            let expr = self.parse_expression()?;
+            return Ok(Stmt::Let(name, expr, is_pub));
+        }
     }
 
     fn parse_or(&mut self) -> Result<Expr, ParseError> {

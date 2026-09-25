@@ -47,8 +47,14 @@ pub enum OpCode {
     Or,
     Not,
     SetLine(usize),
-    Import(Arc<String>),
-    ImportFile(Arc<String>),
+    Import {
+        name: Arc<String>,
+        alias: Arc<String>,
+    },
+    ImportFile {
+        path: Arc<String>,
+        alias: Arc<String>,
+    },
     GetUpvalue(usize),
     SetUpvalue(usize),
     Closure(Arc<FunctionObj>, Arc<Vec<UpvalueLoc>>),
@@ -67,4 +73,6 @@ pub enum OpCode {
     Select(Arc<Vec<SelectCaseOp>>),
     DeferCall(usize),
     DeferMethodCall(Arc<String>, usize),
+    Export(Arc<String>),
+    BuildModule(usize),
 }

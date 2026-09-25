@@ -27,10 +27,12 @@ pub struct CompilerState {
     pub upvalues: Vec<Upvalue>,
     pub scope_depth: usize,
     pub loops: Vec<LoopState>,
+    pub is_module: bool,
+    pub exports: Vec<String>,
 }
 
 impl CompilerState {
-    pub fn new(name: String, arity: usize, return_type: Option<String>) -> Self {
+    pub fn new(name: String, arity: usize, return_type: Option<String>, is_module: bool) -> Self {
         CompilerState {
             function: FunctionObj {
                 name,
@@ -43,6 +45,8 @@ impl CompilerState {
             upvalues: Vec::new(),
             scope_depth: 0,
             loops: Vec::new(),
+            is_module,
+            exports: Vec::new(),
         }
     }
 }
@@ -54,7 +58,13 @@ pub struct Compiler {
 impl Compiler {
     pub fn new() -> Self {
         Compiler {
-            states: vec![CompilerState::new("main".to_string(), 0, None)],
+            states: vec![CompilerState::new("main".to_string(), 0, None, false)],
+        }
+    }
+
+    pub fn new_module(name: String) -> Self {
+        Compiler {
+            states: vec![CompilerState::new(name, 0, None, true)],
         }
     }
 
@@ -151,15 +161,30 @@ impl Compiler {
         for stmt in stmts {
             self.compile_stmt(stmt);
         }
-        self.states.pop().unwrap().function.chunk
+        let top_state = self.states.pop().unwrap();
+        if top_state.is_module {
+            let mut chunk = top_state.function.chunk;
+            let export_count = top_state.exports.len();
+            for exp in &top_state.exports {
+                chunk.push(OpCode::Export(Arc::new(exp.clone())));
+            }
+            chunk.push(OpCode::BuildModule(export_count));
+            chunk.push(OpCode::Return);
+            chunk
+        } else {
+            top_state.function.chunk
+        }
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let(name, expr) => {
+            Stmt::Let(name, expr, is_pub) => {
                 self.compile_expr(expr);
 
                 let state = self.current_state();
+                if *is_pub {
+                    state.exports.push(name.clone());
+                }
                 if state.scope_depth > 0 {
                     let depth = state.scope_depth;
                     state.locals.push(Local {
@@ -171,9 +196,9 @@ impl Compiler {
                 }
             }
 
-            Stmt::Functions(name, params, return_type, body) => {
+            Stmt::Functions(name, params, return_type, body, is_pub) => {
                 let arity = params.len();
-                let mut new_state = CompilerState::new(name.clone(), arity, return_type.clone());
+                let mut new_state = CompilerState::new(name.clone(), arity, return_type.clone(), false);
                 new_state.scope_depth = 1;
 
                 for (param_name, _param_type) in params {
@@ -219,6 +244,10 @@ impl Compiler {
 
                 self.emit(OpCode::Closure(func_value, Arc::new(upvalue_locs)));
                 self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
+
+                if *is_pub {
+                    self.current_state().exports.push(name.clone());
+                }
             }
 
             Stmt::Return(expr) => {
@@ -421,27 +450,43 @@ impl Compiler {
             Stmt::Line(line) => {
                 self.emit(OpCode::SetLine(*line));
             }
-            Stmt::Import(name) => {
-                self.emit(OpCode::Import(Arc::new(name.clone())));
+            Stmt::Import { name, alias } => {
+                let actual_alias = alias.as_ref().unwrap_or(name);
+                self.emit(OpCode::Import {
+                    name: Arc::new(name.clone()),
+                    alias: Arc::new(actual_alias.clone()),
+                });
             }
-            Stmt::ImportFile(path) => {
-                self.emit(OpCode::ImportFile(Arc::new(path.clone())));
+            Stmt::ImportFile { path, alias } => {
+                let default_alias = {
+                    let p = std::path::Path::new(path);
+                    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("module");
+                    stem.to_string()
+                };
+                let actual_alias = alias.as_ref().unwrap_or(&default_alias);
+                self.emit(OpCode::ImportFile {
+                    path: Arc::new(path.clone()),
+                    alias: Arc::new(actual_alias.clone()),
+                });
             }
-            Stmt::Struct(name, fields) => {
+            Stmt::Struct(name, fields, is_pub) => {
                 let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
 
                 self.emit(OpCode::BuildStruct(Arc::new(name.clone()), Arc::new(field_names)));
                 self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
+                if *is_pub {
+                    self.current_state().exports.push(name.clone());
+                }
             }
 
             Stmt::Impl(target_name, methods) => {
                 self.emit(OpCode::LoadGlobal(Arc::new(target_name.clone())));
 
                 for method in methods {
-                    if let Stmt::Functions(name, params, return_type, body) = method {
+                    if let Stmt::Functions(name, params, return_type, body, _) = method {
                         let arity = params.len();
                         let mut new_state =
-                            CompilerState::new(name.clone(), arity, return_type.clone());
+                            CompilerState::new(name.clone(), arity, return_type.clone(), false);
                         new_state.scope_depth = 1;
 
                         for (param_name, _param_type) in params {
@@ -491,9 +536,12 @@ impl Compiler {
                 }
                 self.emit(OpCode::Pop);
             }
-            Stmt::Interface(name, methods) => {
+            Stmt::Interface(name, methods, is_pub) => {
                 self.emit(OpCode::BuildInterface(Arc::new(methods.clone())));
                 self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
+                if *is_pub {
+                    self.current_state().exports.push(name.clone());
+                }
             }
             Stmt::LetTuple(names, expr) => {
                 self.compile_expr(expr);

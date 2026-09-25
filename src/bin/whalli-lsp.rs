@@ -919,7 +919,7 @@ impl LanguageServer for Backend {
             // Keywords
             for kw in [
                 "let", "func", "return", "if", "else", "while", "for", "in",
-                "and", "or", "not", "break", "continue", "import", "struct",
+                "and", "or", "not", "break", "continue", "import", "as", "pub", "struct",
                 "impl", "is", "interface", "wo", "defer", "match", "select", "default", "true", "false", "nil",
             ] {
                 items.push(CompletionItem {
@@ -2734,7 +2734,7 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
 
                 let (token_type, token_modifiers) = match word.as_str() {
                     "let" | "func" | "return" | "if" | "else" | "while" | "for" | "in"
-                    | "break" | "continue" | "import" | "struct" | "impl" | "is"
+                    | "break" | "continue" | "import" | "as" | "pub" | "struct" | "impl" | "is"
                     | "interface" | "wo" | "defer" | "match" | "select" | "default" | "true" | "false" | "nil" => (0, 0), // KEYWORD
 
                     "and" | "or" | "not" => (8, 0), // OPERATOR

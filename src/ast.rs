@@ -78,7 +78,7 @@ pub enum Expr {
 
 #[derive(Debug)]
 pub enum Stmt {
-    Let(String, Expr),
+    Let(String, Expr, bool), // name, expr, is_pub
     LetTuple(Vec<String>, Expr),
     Assign(String, Expr),
     IndexAssign(Expr, Expr, Expr),
@@ -87,6 +87,7 @@ pub enum Stmt {
         Vec<(String, Option<String>)>,
         Option<String>,
         Vec<Stmt>,
+        bool, // is_pub
     ),
     Return(Expr),
     Expr(Expr),
@@ -107,12 +108,18 @@ pub enum Stmt {
     Break,
     Continue,
     Block(Vec<Stmt>),
-    Import(String),        // import net  — stdlib module
-    ImportFile(String),    // import "./path.wh"  — local file
-    Struct(String, Vec<(String, String)>),
+    Import {
+        name: String,
+        alias: Option<String>,
+    },
+    ImportFile {
+        path: String,
+        alias: Option<String>,
+    },
+    Struct(String, Vec<(String, String)>, bool), // name, fields, is_pub
     Impl(String, Vec<Stmt>),
     Line(usize),
-    Interface(String, Vec<String>),
+    Interface(String, Vec<String>, bool), // name, methods, is_pub
     Spawn(Box<Expr>, Vec<Expr>),
     Defer(Box<Expr>),
 }
