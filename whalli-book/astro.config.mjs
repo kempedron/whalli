@@ -10,7 +10,7 @@ const whalliGrammar = JSON.parse(
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://whalli.is-a.dev',
-	base: '/',
+	base: '/whalli',
 	integrations: [
 		starlight({
 			title: 'Whalli',
