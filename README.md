@@ -313,18 +313,6 @@ Whalli comes with official tooling for **VS Code** and **VSCodium**:
 
 ---
 
-## 📚 Documentation
-
-- **Starlight Book (primary):** [whalli.is-a.dev](https://whalli.is-a.dev) — 8 chapters covering Quick Start, Language Tour, Concurrency, I/O & Networking (http Keep-Alive, middleware, sql), Stdlib, Toolchain, Tooling and Examples. Source in `whalli-book/`, auto-deployed to GitHub Pages via `.github/workflows/deploy-starlight.yml` on push to `main`. Custom domain `whalli.is-a.dev` via `is-a.dev` (`whalli-book/public/CNAME`).
-- **mdBook (legacy):** `whalli-docs/` (`book.toml`) — kept for reference, build locally with `mdbook build whalli-docs` → `whalli-docs/book/`.
-
-To register/renew the `is-a.dev` domain: fork [is-a-dev/register](https://github.com/is-a-dev/register), add `domains/whalli.json`:
-```json
-{"owner":{"username":"kempedron","email":"kempedron@gmail.com"},"record":{"CNAME":"kempedron.github.io"},"proxied":false}
-```
-Then enable `Settings > Pages > Custom domain: whalli.is-a.dev` + `Enforce HTTPS` after first deploy.
-
----
 
 ## 📄 License
 
