@@ -38,6 +38,8 @@ impl CompilerState {
                 name,
                 arity,
                 chunk: Vec::new(),
+                bytecode: Vec::new(),
+                constants: Vec::new(),
                 param_types: Vec::new(),
                 return_type,
             },
@@ -74,6 +76,22 @@ impl Compiler {
 
     fn emit(&mut self, opcode: OpCode) {
         self.current_state().function.chunk.push(opcode);
+    }
+
+    fn add_constant(&mut self, val: Value) -> usize {
+        let constants = &mut self.current_state().function.constants;
+        for (i, c) in constants.iter().enumerate() {
+            if c == &val {
+                return i;
+            }
+        }
+        constants.push(val);
+        constants.len() - 1
+    }
+
+    fn emit_constant(&mut self, val: Value) {
+        let idx = self.add_constant(val);
+        self.emit(OpCode::Constant(idx));
     }
 
     fn current_ip(&mut self) -> usize {
@@ -176,6 +194,26 @@ impl Compiler {
         }
     }
 
+    pub fn compile_function(mut self, stmts: &[Stmt]) -> FunctionObj {
+        for stmt in stmts {
+            self.compile_stmt(stmt);
+        }
+        let mut top_state = self.states.pop().unwrap();
+        if top_state.is_module {
+            let export_count = top_state.exports.len();
+            for exp in &top_state.exports {
+                top_state.function.chunk.push(OpCode::Export(Arc::new(exp.clone())));
+            }
+            top_state.function.chunk.push(OpCode::BuildModule(export_count));
+            top_state.function.chunk.push(OpCode::Return);
+        }
+        top_state.function.bytecode = crate::opcode::serialize_chunk(
+            &top_state.function.chunk,
+            &mut top_state.function.constants,
+        );
+        top_state.function
+    }
+
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let(name, expr, is_pub) => {
@@ -251,8 +289,22 @@ impl Compiler {
             }
 
             Stmt::Return(expr) => {
-                self.compile_expr(expr);
-                self.emit(OpCode::Return);
+                let is_tail_call = match expr {
+                    Expr::Call(callee, args) => {
+                        self.compile_expr(callee);
+                        for arg in args {
+                            self.compile_expr(arg);
+                        }
+                        self.emit(OpCode::TailCall(args.len()));
+                        true
+                    }
+                    _ => false,
+                };
+
+                if !is_tail_call {
+                    self.compile_expr(expr);
+                    self.emit(OpCode::Return);
+                }
             }
             Stmt::Expr(expr) => {
                 self.compile_expr(expr);
@@ -469,6 +521,20 @@ impl Compiler {
                     alias: Arc::new(actual_alias.clone()),
                 });
             }
+            Stmt::FromImport { source, symbols } => {
+                let sym_pairs = symbols
+                    .iter()
+                    .map(|(orig, alias)| {
+                        let target = alias.as_ref().unwrap_or(orig).clone();
+                        (orig.clone(), target)
+                    })
+                    .collect();
+
+                self.emit(OpCode::FromImport {
+                    source: Arc::new(source.clone()),
+                    symbols: Arc::new(sym_pairs),
+                });
+            }
             Stmt::Struct(name, fields, is_pub) => {
                 let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
 
@@ -563,6 +629,47 @@ impl Compiler {
                     }
                 }
             }
+            Stmt::LetList(names, expr) => {
+                self.compile_expr(expr);
+
+                self.emit(OpCode::UnpackList(names.len()));
+
+                let state = self.current_state();
+                if state.scope_depth > 0 {
+                    let depth = state.scope_depth;
+                    for name in names {
+                        self.current_state().locals.push(Local {
+                            name: name.clone(),
+                            depth,
+                        });
+                    }
+                } else {
+                    for name in names.iter().rev() {
+                        self.emit(OpCode::StoreGlobal(Arc::new(name.clone())));
+                    }
+                }
+            }
+            Stmt::LetObject(fields, expr) => {
+                self.compile_expr(expr);
+
+                let prop_names: Vec<String> = fields.iter().map(|(prop, _)| prop.clone()).collect();
+                self.emit(OpCode::UnpackObject(Arc::new(prop_names)));
+
+                let state = self.current_state();
+                if state.scope_depth > 0 {
+                    let depth = state.scope_depth;
+                    for (_, var_name) in fields {
+                        self.current_state().locals.push(Local {
+                            name: var_name.clone(),
+                            depth,
+                        });
+                    }
+                } else {
+                    for (_, var_name) in fields.iter().rev() {
+                        self.emit(OpCode::StoreGlobal(Arc::new(var_name.clone())));
+                    }
+                }
+            }
             Stmt::Spawn(callee, args) => {
                 self.compile_expr(callee);
                 for arg in args {
@@ -594,7 +701,7 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(val) => {
-                self.emit(OpCode::Push(val.clone()));
+                self.emit_constant(val.clone());
             }
             Expr::Binary(left, op, right) => {
                 self.compile_expr(left);

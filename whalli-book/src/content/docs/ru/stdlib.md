@@ -9,6 +9,29 @@ description: Справочник по встроенным модулям ст�
 
 ---
 
+## Модуль `requests` (HTTP-клиент)
+
+Удобный HTTP/HTTPS клиент:
+
+- `requests.get(url: str, options: map = nil) -> map`
+- `requests.post(url: str, options: map = nil) -> map`
+- `requests.put(url: str, options: map = nil) -> map`
+- `requests.delete(url: str, options: map = nil) -> map`
+
+Объект ответа содержит: `status_code`, `status_text`, `ok` (bool), `text`, `url`, `error`, метод `.json()` и метод `.header(name)`.
+
+```whalli
+import requests
+
+let res = requests.get("https://httpbin.org/get", {"timeout": 5})
+if res.ok {
+    println("HTTP Status:", res.status_code)
+    let body = res.json()
+}
+```
+
+---
+
 ## Модуль `sql`
 
 Универсальный SQL-клиент с поддержкой **SQLite**, **PostgreSQL** и **MySQL**.
@@ -107,3 +130,31 @@ db.close()
 ## Модуль `math`
 
 Математические функции: `math.sqrt`, `math.pow`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.round`, `math.abs`, и константы `math.pi`, `math.e`.
+
+---
+
+## Модуль `crypto`
+
+Криптографические алгоритмы, хеширование, генерация случайных токенов и Base64/Hex кодирование:
+
+- `crypto.sha256(data: str | bytes) -> str`: Вычисление хеша SHA-256 (в формате hex).
+- `crypto.sha1(data: str | bytes) -> str`: Вычисление хеша SHA-1.
+- `crypto.md5(data: str | bytes) -> str`: Вычисление хеша MD5.
+- `crypto.hmac_sha256(key: str | bytes, message: str | bytes) -> str`: Вычисление подписи HMAC-SHA256.
+- `crypto.base64_encode(data: str | bytes) -> str`: Кодирование данных в строку Base64.
+- `crypto.base64_decode(encoded_str: str) -> (data: bytes | nil, err: str | nil)`: Декодирование Base64 в байты.
+- `crypto.hex_encode(data: bytes | str) -> str`: Преобразование байтов в шестнадцатеричную строку.
+- `crypto.hex_decode(hex_str: str) -> (data: bytes | nil, err: str | nil)`: Парсинг hex-строки в байты.
+- `crypto.random_bytes(length: int = 16) -> bytes`: Генерация криптографически стойких случайных байтов.
+- `crypto.random_hex(length: int = 16) -> str`: Генерация случайного hex-токена (длина строки = 2 * length).
+- `crypto.uuid4() -> str`: Генерация случайного UUID версии 4.
+
+```whalli
+import crypto
+
+let password_hash = crypto.sha256("my_secret_pass")
+let session_token = crypto.random_hex(32)
+let request_uuid = crypto.uuid4()
+
+let signature = crypto.hmac_sha256("api_secret", "action=pay&amount=100")
+```

@@ -41,6 +41,9 @@ All responses default to persistent connections (`Connection: keep-alive` with `
 | `req["method"]` | HTTP Method (`"GET"`, `"POST"`, etc.) |
 | `req["path"]` | Normalized URL path (`"/api/tasks"`) |
 | `req["remote_addr"]` | Client socket address (`"127.0.0.1:54321"`) |
+| `req["state"]` | Context map for transferring state across middlewares and handlers |
+| `req.set(key, val)` | Store a key-value in request context |
+| `req.get(key, default = nil)` | Retrieve a value from request context |
 | `req.header(key, default = nil)` | Case-insensitive header lookup |
 | `req.cookie(name, default = nil)` | Parsed cookie lookup from `Cookie` header |
 | `req.query(key, default = nil)` | URL query string parameter |
@@ -106,6 +109,39 @@ router.use(http.rate_limiter(100, 60)) // 100 requests per 60 seconds
 ```whalli
 // Safely serves files from directory with MIME detection and path traversal protection
 router.static("/public", "./static_files")
+```
+
+### WebSocket Support (RFC 6455)
+
+Whalli natively supports upgrading incoming HTTP requests into bi-directional WebSocket connections:
+
+```whalli
+import http
+
+let router = http.router()
+
+router.get("/ws", func(req) {
+    let (ws, err) = http.upgrade(req)
+    if err != nil {
+        return http.text_response(400, err)
+    }
+
+    // Read and send WebSocket frames
+    while true {
+        let (msg, r_err) = ws.read()
+        if msg != nil {
+            println("Received from client:", msg)
+            ws.send("Echo: " + msg)
+        }
+        if r_err != nil and r_err != "WouldBlock" {
+            break
+        }
+    }
+    ws.close()
+    return nil
+})
+
+http.listen_and_serve(":8080", router)
 ```
 
 ---

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::{
     heap::{Heap, Obj},
     opcode::OpCode,
+    vm::VM,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,6 +13,8 @@ pub struct FunctionObj {
     pub name: String,
     pub arity: usize,
     pub chunk: Vec<OpCode>,
+    pub bytecode: Vec<u8>,
+    pub constants: Vec<Value>,
     pub param_types: Vec<String>,
     pub return_type: Option<String>,
 }
@@ -390,21 +393,184 @@ impl Value {
                                 Ok(default_val)
                             })?
                         }
-                        "close" => {
-                            let db_id_opt = heap.with_read(*id, |obj| {
-                                if let Obj::Map(map) = obj {
-                                    if let Some(Value::Int(db_id)) = map.get("db_id") {
-                                        return Some(*db_id as usize);
+                        "set" => {
+                            if args.len() < 2 {
+                                return Err("'set' expects key string and value: req.set(key, val)".to_string());
+                            }
+                            let key = match &args[0] {
+                                Value::Str(s) => s.as_str().to_string(),
+                                _ => return Err("Key must be a string".to_string()),
+                            };
+                            let val = args[1].clone();
+                            heap.with_write(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    if let Some(Value::ObjRef(s_id)) = m.get("state") {
+                                        let s_id = *s_id;
+                                        let _ = heap.with_write(s_id, |s_obj| {
+                                            if let Obj::Map(state_map) = s_obj {
+                                                state_map.insert(key, val);
+                                            }
+                                            Ok::<(), String>(())
+                                        });
+                                        return Ok(Value::Nil);
                                     }
+                                    m.insert(key, val);
+                                    Ok(Value::Nil)
+                                } else {
+                                    Err("Expected map object".to_string())
                                 }
-                                None
+                            })?
+                        }
+                        "close" => {
+                            let (db_id_opt, ws_client_id) = heap.with_read(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    let db = map.get("db_id").and_then(|v| {
+                                        if let Value::Int(d) = v { Some(*d as usize) } else { None }
+                                    });
+                                    let ws = if map.contains_key("__is_websocket") {
+                                        map.get("client_id").and_then(|v| {
+                                            if let Value::Int(c) = v { Some(*c as usize) } else { None }
+                                        })
+                                    } else {
+                                        None
+                                    };
+                                    (db, ws)
+                                } else {
+                                    (None, None)
+                                }
                             })?;
 
                             if let Some(conn_id) = db_id_opt {
                                 let ok = crate::stdlib::sql::db_manager().close(conn_id);
-                                Ok(Value::Bool(ok))
+                                return Ok(Value::Bool(ok));
+                            }
+                            if let Some(client_id) = ws_client_id {
+                                let mut temp_vm = VM {
+                                    main_task: None,
+                                    globals: HashMap::new(),
+                                    modules: HashMap::new(),
+                                    heap: heap.clone(),
+                                    current_line: 1,
+                                    gc_threshold: 256,
+                                    imported_files: std::collections::HashSet::new(),
+                                    net: crate::vm::global_net(),
+                                    channel_timers: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                                };
+                                crate::stdlib::ws::ws_close_internal(client_id, &mut temp_vm);
+                                return Ok(Value::Bool(true));
+                            }
+                            Err("Method 'close' not found on map".to_string())
+                        }
+                        "send" => {
+                            let is_ws = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    m.contains_key("__is_websocket")
+                                } else {
+                                    false
+                                }
+                            }).unwrap_or(false);
+
+                            if is_ws {
+                                if args.is_empty() {
+                                    return Err("ws.send expects message string or bytes".to_string());
+                                }
+                                let client_id = heap.with_read(*id, |obj| {
+                                    if let Obj::Map(m) = obj {
+                                        if let Some(Value::Int(cid)) = m.get("client_id") {
+                                            Some(*cid as usize)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })?.ok_or_else(|| "Invalid websocket object".to_string())?;
+
+                                let mut temp_vm = VM {
+                                    main_task: None,
+                                    globals: HashMap::new(),
+                                    modules: HashMap::new(),
+                                    heap: heap.clone(),
+                                    current_line: 1,
+                                    gc_threshold: 256,
+                                    imported_files: std::collections::HashSet::new(),
+                                    net: crate::vm::global_net(),
+                                    channel_timers: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                                };
+                                let (ok, err) = crate::stdlib::ws::ws_send_internal(client_id, &args[0], &mut temp_vm);
+                                if ok {
+                                    return Ok(Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil])));
+                                } else {
+                                    let err_val = err.map(|e| Value::Str(Arc::new(e))).unwrap_or(Value::Nil);
+                                    return Ok(Value::Tuple(Arc::new(vec![Value::Bool(false), err_val])));
+                                }
+                            }
+                            Err("Method 'send' not found on map".to_string())
+                        }
+                        "read" => {
+                            let is_ws = heap.with_read(*id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    m.contains_key("__is_websocket")
+                                } else {
+                                    false
+                                }
+                            }).unwrap_or(false);
+
+                            if is_ws {
+                                let client_id = heap.with_read(*id, |obj| {
+                                    if let Obj::Map(m) = obj {
+                                        if let Some(Value::Int(cid)) = m.get("client_id") {
+                                            Some(*cid as usize)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })?.ok_or_else(|| "Invalid websocket object".to_string())?;
+
+                                let mut temp_vm = VM {
+                                    main_task: None,
+                                    globals: HashMap::new(),
+                                    modules: HashMap::new(),
+                                    heap: heap.clone(),
+                                    current_line: 1,
+                                    gc_threshold: 256,
+                                    imported_files: std::collections::HashSet::new(),
+                                    net: crate::vm::global_net(),
+                                    channel_timers: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                                };
+                                let (msg_opt, err_opt, would_block) = crate::stdlib::ws::ws_read_internal(client_id, &mut temp_vm);
+                                if would_block {
+                                    return Ok(Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("WouldBlock".to_string()))])));
+                                }
+                                let msg_val = msg_opt.unwrap_or(Value::Nil);
+                                let err_val = err_opt.map(|e| Value::Str(Arc::new(e))).unwrap_or(Value::Nil);
+                                return Ok(Value::Tuple(Arc::new(vec![msg_val, err_val])));
+                            }
+                            Err("Method 'read' not found on map".to_string())
+                        }
+                        "stop" => {
+                            let (server_id, is_router) = heap.with_write(*id, |obj| {
+                                if let Obj::Map(map) = obj {
+                                    map.insert("running".to_string(), Value::Bool(false));
+                                    let sid = match map.get("server_id") {
+                                        Some(Value::Int(sid)) => Some(*sid as usize),
+                                        _ => None,
+                                    };
+                                    (sid, true)
+                                } else {
+                                    (None, false)
+                                }
+                            })?;
+
+                            if is_router {
+                                if let Some(sid) = server_id {
+                                    crate::stdlib::http::stop_server_internal(sid);
+                                }
+                                Ok(Value::Bool(true))
                             } else {
-                                Err("Method 'close' not found on map".to_string())
+                                Err("Method 'stop' not found on map".to_string())
                             }
                         }
                         "exec" => {
@@ -791,17 +957,24 @@ impl Value {
                         }
                         "get" => {
                             let is_router_like = heap.with_read(*id, |obj| {
-                                if let Obj::Map(map) = obj {
-                                    map.contains_key("routes") || map.contains_key("parent")
-                                } else {
-                                    false
-                                }
+                                 if let Obj::Map(map) = obj {
+                                     map.contains_key("routes") || map.contains_key("parent")
+                                 } else {
+                                     false
+                                 }
                             }).unwrap_or(false);
 
                             if args.len() == 1 {
                                 if let Value::Str(key) = &args[0] {
                                     heap.with_read(*id, |obj| {
                                         if let Obj::Map(map) = obj {
+                                            if let Some(Value::ObjRef(s_id)) = map.get("state") {
+                                                if let Ok(Obj::Map(state_map)) = heap.get(*s_id) {
+                                                    if let Some(v) = state_map.get(&**key) {
+                                                        return Ok(v.clone());
+                                                    }
+                                                }
+                                            }
                                             Ok(map.get(&**key).cloned().unwrap_or(Value::Nil))
                                         } else {
                                             unreachable!()
@@ -817,6 +990,13 @@ impl Value {
                                     if let Value::Str(key) = &args[0] {
                                         heap.with_read(*id, |obj| {
                                             if let Obj::Map(map) = obj {
+                                                if let Some(Value::ObjRef(s_id)) = map.get("state") {
+                                                    if let Ok(Obj::Map(state_map)) = heap.get(*s_id) {
+                                                        if let Some(v) = state_map.get(&**key) {
+                                                            return Ok(v.clone());
+                                                        }
+                                                    }
+                                                }
                                                 Ok(map.get(&**key).cloned().unwrap_or_else(|| args[1].clone()))
                                             } else {
                                                 unreachable!()

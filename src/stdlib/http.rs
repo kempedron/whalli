@@ -13,6 +13,10 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+pub fn stop_server_internal(_server_id: usize) {
+    // Forward to net_close logic if VM instance or listeners are available
+}
+
 pub fn parse_addr_str(addr_val: &Value) -> Result<(String, u16), String> {
     match addr_val {
         Value::Int(p) => Ok(("0.0.0.0".to_string(), *p as u16)),
@@ -261,6 +265,7 @@ pub fn serve_static_file(
 }
 
 pub fn parse_http_request_bytes(raw_bytes: &[u8], vm: &mut VM, remote_addr: &str) -> Result<Value, String> {
+    const DEFAULT_MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
     let mut headers_buf = [httparse::Header { name: "", value: &[] }; 64];
     let mut parsed_req = httparse::Request::new(&mut headers_buf);
 
@@ -287,11 +292,23 @@ pub fn parse_http_request_bytes(raw_bytes: &[u8], vm: &mut VM, remote_addr: &str
 
     // Parse headers into Map (lowercase keys)
     let mut headers_map = HashMap::new();
+    let mut content_length_val: Option<usize> = None;
     for h in parsed_req.headers {
         if !h.name.is_empty() {
             let key_lower = h.name.to_lowercase();
             let val = String::from_utf8_lossy(h.value).to_string();
+            if key_lower == "content-length" {
+                if let Ok(cl) = val.trim().parse::<usize>() {
+                    content_length_val = Some(cl);
+                }
+            }
             headers_map.insert(key_lower, Value::Str(Arc::new(val)));
+        }
+    }
+
+    if let Some(cl) = content_length_val {
+        if cl > DEFAULT_MAX_BODY_SIZE {
+            return Err("Payload Too Large: Content-Length exceeds maximum allowed limit (10MB)".to_string());
         }
     }
 
@@ -313,6 +330,9 @@ pub fn parse_http_request_bytes(raw_bytes: &[u8], vm: &mut VM, remote_addr: &str
     let cookies_id = vm.heap.alloc(Obj::Map(cookies_map));
 
     let body_bytes = &raw_bytes[header_len..];
+    if body_bytes.len() > DEFAULT_MAX_BODY_SIZE {
+        return Err("Payload Too Large: Body exceeds maximum allowed limit (10MB)".to_string());
+    }
     let body_str = String::from_utf8_lossy(body_bytes).to_string();
 
     // Parse form if application/x-www-form-urlencoded
@@ -327,6 +347,7 @@ pub fn parse_http_request_bytes(raw_bytes: &[u8], vm: &mut VM, remote_addr: &str
     };
     let form_id = vm.heap.alloc(Obj::Map(form_map));
     let res_headers_id = vm.heap.alloc(Obj::Map(HashMap::new()));
+    let state_id = vm.heap.alloc(Obj::Map(HashMap::new()));
 
     let headers_id = vm.heap.alloc(Obj::Map(headers_map));
 
@@ -339,6 +360,7 @@ pub fn parse_http_request_bytes(raw_bytes: &[u8], vm: &mut VM, remote_addr: &str
     req_map.insert("cookies".to_string(), Value::ObjRef(cookies_id));
     req_map.insert("form".to_string(), Value::ObjRef(form_id));
     req_map.insert("res_headers".to_string(), Value::ObjRef(res_headers_id));
+    req_map.insert("state".to_string(), Value::ObjRef(state_id));
     req_map.insert("body".to_string(), Value::Str(Arc::new(body_str)));
     req_map.insert("proto".to_string(), Value::Str(Arc::new("HTTP/1.1".to_string())));
     req_map.insert("remote_addr".to_string(), Value::Str(Arc::new(remote_addr.to_string())));
@@ -639,6 +661,15 @@ pub fn register(vm: &mut VM) -> Value {
 
                 match parse_http_request_bytes(&total_buffer, vm, &remote_addr) {
                     Ok(req_val) => {
+                        if let Value::ObjRef(r_id) = &req_val {
+                            let _ = vm.heap.with_write(*r_id, |obj| {
+                                if let Obj::Map(m) = obj {
+                                    m.insert("client_id".to_string(), Value::Int(client_id as i64));
+                                }
+                                Ok::<(), String>(())
+                            });
+                        }
+
                         let res = Value::Tuple(Arc::new(vec![req_val, Value::Nil]));
                         NativeResult::Return(res)
                     }
@@ -1335,6 +1366,127 @@ pub fn register(vm: &mut VM) -> Value {
         }),
     );
 
+    // 23. http.stop(router_or_server_id) -> bool
+    http_module.insert(
+        "stop".to_string(),
+        Value::Native(|args, vm| {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Value::ObjRef(r_id) => {
+                        let server_id = vm.heap.with_write(*r_id, |obj| {
+                            if let Obj::Map(m) = obj {
+                                m.insert("running".to_string(), Value::Bool(false));
+                                if let Some(Value::Int(sid)) = m.get("server_id") {
+                                    Some(*sid as usize)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }).ok().flatten();
+
+                        if let Some(sid) = server_id {
+                            crate::stdlib::net::net_close(vec![Value::Int(sid as i64)], vm);
+                            return NativeResult::Return(Value::Bool(true));
+                        }
+                    }
+                    Value::Int(sid) => {
+                        crate::stdlib::net::net_close(vec![Value::Int(*sid)], vm);
+                        return NativeResult::Return(Value::Bool(true));
+                    }
+                    _ => {}
+                }
+            }
+            NativeResult::Return(Value::Bool(false))
+        }),
+    );
+
+    // 24. http.upgrade(req) -> (ws: map | nil, err: str | nil)
+    http_module.insert(
+        "upgrade".to_string(),
+        Value::Native(|args, vm| {
+            let req_val = match args.first() {
+                Some(Value::ObjRef(r_id)) => *r_id,
+                _ => {
+                    let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("http.upgrade expects req object".to_string()))]));
+                    return NativeResult::Return(res);
+                }
+            };
+
+            let (client_id, sec_key) = vm.heap.with_read(req_val, |obj| {
+                if let Obj::Map(m) = obj {
+                    let cid = match m.get("client_id") {
+                        Some(Value::Int(n)) => Some(*n as usize),
+                        _ => None,
+                    };
+                    let key = if let Some(Value::ObjRef(h_id)) = m.get("headers") {
+                        if let Ok(Obj::Map(h_map)) = vm.heap.get(*h_id) {
+                            h_map.get("sec-websocket-key").and_then(|v| {
+                                if let Value::Str(s) = v { Some(s.as_str().to_string()) } else { None }
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    (cid, key)
+                } else {
+                    (None, None)
+                }
+            }).unwrap_or((None, None));
+
+            let client_id = match client_id {
+                Some(c) => c,
+                None => {
+                    let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("Cannot upgrade: client_id missing in request".to_string()))]));
+                    return NativeResult::Return(res);
+                }
+            };
+
+            let sec_key = match sec_key {
+                Some(k) => k,
+                None => {
+                    let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("Missing Sec-WebSocket-Key header".to_string()))]));
+                    return NativeResult::Return(res);
+                }
+            };
+
+            // Calculate accept key
+            let accept_val = crate::stdlib::ws_crypto::websocket_accept_key(&sec_key);
+            let handshake_resp = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                accept_val
+            );
+
+            // Send handshake response immediately over socket
+            let write_res = crate::stdlib::net::net_write_all(vec![Value::Int(client_id as i64), Value::Str(Arc::new(handshake_resp))], vm);
+            if let NativeResult::Return(Value::Tuple(t)) = write_res {
+                if t.get(0) != Some(&Value::Bool(true)) {
+                    let res = Value::Tuple(Arc::new(vec![Value::Nil, Value::Str(Arc::new("Failed to write websocket handshake".to_string()))]));
+                    return NativeResult::Return(res);
+                }
+            }
+
+            // Mark req as upgraded so HTTP loop won't send duplicate response or close socket
+            let _ = vm.heap.with_write(req_val, |obj| {
+                if let Obj::Map(m) = obj {
+                    m.insert("__ws_upgraded".to_string(), Value::Bool(true));
+                }
+                Ok::<(), String>(())
+            });
+
+            let mut ws_map = HashMap::new();
+            ws_map.insert("client_id".to_string(), Value::Int(client_id as i64));
+            ws_map.insert("__is_websocket".to_string(), Value::Bool(true));
+            let ws_id = vm.heap.alloc(Obj::Map(ws_map));
+
+            let res = Value::Tuple(Arc::new(vec![Value::ObjRef(ws_id), Value::Nil]));
+            NativeResult::Return(res)
+        }),
+    );
+
     // Status Constants
     http_module.insert("STATUS_OK".to_string(), Value::Int(200));
     http_module.insert("STATUS_CREATED".to_string(), Value::Int(201));
@@ -1447,54 +1599,87 @@ pub fn register(vm: &mut VM) -> Value {
 
     func _whalli_http_serve_client(client_id, handler) {
         http.set_nodelay(client_id, true)
-        let (req, r_err) = http.read_request(client_id)
-        if r_err != nil or req == nil {
-            http.close(client_id)
-            return
-        }
+        let is_upgraded = false
 
-        let resp = nil
-        if handler is map {
-            resp = http._run_mws(handler["middlewares"], req)
-            if resp == nil {
-                let (fn_route, params) = http.match_route(handler, req["method"], req["path"])
-                if fn_route != nil {
-                    if params != nil {
-                        req["params"] = params
-                        resp = http._run_mws(params["_middlewares"], req)
-                    }
-                    if resp == nil {
-                        if fn_route is map {
-                            let fp = ""
-                            if req["params"] != nil {
-                                fp = req["params"]["filepath"]
-                            }
-                            resp = http.file_response(fn_route["static_dir"], fp)
-                        } else {
-                            resp = fn_route(req)
-                        }
-                    }
-                } else {
-                    resp = http._handle_missing(handler, req)
+        while true {
+            let (req, r_err) = http.read_request(client_id)
+            if r_err != nil {
+                let err_str = str(r_err)
+                let status = 400
+                if err_str.contains("Payload Too Large") {
+                    status = 413
                 }
+                let err_resp = http.response(status, {"Connection": "close"}, f"{status} {err_str}\r\n")
+                http.write_all(client_id, err_resp)
+                break
             }
-        } else {
-            resp = handler(req)
-        }
+            if req == nil {
+                break
+            }
 
-        if resp != nil {
+            let resp = nil
+            if handler is map {
+                resp = http._run_mws(handler["middlewares"], req)
+                if resp == nil {
+                    let (fn_route, params) = http.match_route(handler, req["method"], req["path"])
+                    if fn_route != nil {
+                        if params != nil {
+                            req["params"] = params
+                            resp = http._run_mws(params["_middlewares"], req)
+                        }
+                        if resp == nil {
+                            if fn_route is map {
+                                let fp = ""
+                                if req["params"] != nil {
+                                    fp = req["params"]["filepath"]
+                                }
+                                resp = http.file_response(fn_route["static_dir"], fp)
+                            } else {
+                                resp = fn_route(req)
+                            }
+                        }
+                    } else {
+                        resp = http._handle_missing(handler, req)
+                    }
+                }
+            } else {
+                resp = handler(req)
+            }
+
+            if req["__ws_upgraded"] == true {
+                // Connection was upgraded to WebSocket; do NOT write HTTP response or close socket
+                is_upgraded = true
+                break
+            }
+
+            if resp == nil {
+                resp = http.response(500, {"Connection": "close"}, "500 Internal Server Error")
+            }
+
             if req["res_headers"] != nil {
                 resp = http.merge_headers(resp, req["res_headers"])
             }
+
             if req["method"] == "HEAD" {
                 let parts = resp.split("\r\n\r\n")
                 if parts.len() >= 2 {
                     resp = parts[0] + "\r\n\r\n"
                 }
             }
+
             http.write_all(client_id, resp)
+
+            // Keep-Alive check
+            let client_conn = req.header("connection", "")
+            let has_close = resp.contains("Connection: close") or resp.contains("connection: close")
+            if client_conn == "close" or has_close or req["proto"] == "HTTP/1.0" {
+                break
+            }
         }
-        http.close(client_id)
+
+        if is_upgraded == false {
+            http.close(client_id)
+        }
     }
 
     func _whalli_http_listen_and_serve(addr, handler) {
@@ -1504,14 +1689,21 @@ pub fn register(vm: &mut VM) -> Value {
         }
         if handler is map {
             handler["server_id"] = server_id
+            handler["running"] = true
         }
         while true {
+            if handler is map {
+                if handler["running"] == false {
+                    break
+                }
+            }
             let client_id = http.accept(server_id)
             if client_id == nil {
                 break
             }
             wo http._serve_client(client_id, handler)
         }
+        http.close(server_id)
         return (true, nil)
     }
     "#;

@@ -3,9 +3,11 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import fs from 'node:fs';
 
-const whalliGrammar = JSON.parse(
-	fs.readFileSync(new URL('./whalli.tmLanguage.json', import.meta.url), 'utf-8')
-);
+const whalliGrammar = {
+	...JSON.parse(fs.readFileSync(new URL('./whalli.tmLanguage.json', import.meta.url), 'utf-8')),
+	name: 'whalli',
+	aliases: ['wh'],
+};
 
 // https://astro.build/config
 export default defineConfig({

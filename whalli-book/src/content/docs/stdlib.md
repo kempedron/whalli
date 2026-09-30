@@ -9,6 +9,29 @@ Whalli comes with built-in modules in its runtime. Standard modules are imported
 
 ---
 
+## `requests` Module (HTTP Client)
+
+Ergonomic HTTP/HTTPS client:
+
+- `requests.get(url: str, options: map = nil) -> map`
+- `requests.post(url: str, options: map = nil) -> map`
+- `requests.put(url: str, options: map = nil) -> map`
+- `requests.delete(url: str, options: map = nil) -> map`
+
+The returned response object provides: `status_code`, `status_text`, `ok` (bool), `text`, `url`, `error`, `.json()`, and `.header(name)`.
+
+```whalli
+import requests
+
+let res = requests.get("https://httpbin.org/get", {"timeout": 5})
+if res.ok {
+    println("HTTP Status:", res.status_code)
+    let body = res.json()
+}
+```
+
+---
+
 ## `sql` Module
 
 Unified SQL database interface supporting **SQLite**, **PostgreSQL**, and **MySQL**.
@@ -104,3 +127,31 @@ System utilities and environment variables:
 ## `math` Module
 
 Standard mathematical functions: `math.sqrt`, `math.pow`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.round`, `math.abs`, and constants `math.pi`, `math.e`.
+
+---
+
+## `crypto` Module
+
+Cryptographic algorithms, hashing, random generation, and Base64/Hex utilities:
+
+- `crypto.sha256(data: str | bytes) -> str`: Computes SHA-256 hash (hex string).
+- `crypto.sha1(data: str | bytes) -> str`: Computes SHA-1 hash (hex string).
+- `crypto.md5(data: str | bytes) -> str`: Computes MD5 hash (hex string).
+- `crypto.hmac_sha256(key: str | bytes, message: str | bytes) -> str`: Computes HMAC-SHA256 signature.
+- `crypto.base64_encode(data: str | bytes) -> str`: Base64 encodes input.
+- `crypto.base64_decode(encoded_str: str) -> (data: bytes | nil, err: str | nil)`: Decodes Base64 to bytes.
+- `crypto.hex_encode(data: bytes | str) -> str`: Encodes bytes into hexadecimal text.
+- `crypto.hex_decode(hex_str: str) -> (data: bytes | nil, err: str | nil)`: Decodes hex string into bytes.
+- `crypto.random_bytes(length: int = 16) -> bytes`: Generates cryptographically secure random bytes.
+- `crypto.random_hex(length: int = 16) -> str`: Generates random hex token (length in bytes, output string len is 2 * length).
+- `crypto.uuid4() -> str`: Generates random UUID version 4 string.
+
+```whalli
+import crypto
+
+let password_hash = crypto.sha256("my_secret_pass")
+let session_token = crypto.random_hex(32)
+let request_uuid = crypto.uuid4()
+
+let signature = crypto.hmac_sha256("api_secret", "action=pay&amount=100")
+```

@@ -224,6 +224,44 @@ impl Parser {
             }
         }
 
+        if self.match_token(TokenKind::From) {
+            let source_token = self.advance().clone();
+            let source = match source_token {
+                TokenKind::Str(path) => path,
+                TokenKind::Identifier(mod_name) => mod_name,
+                _ => return Err(self.error("Expected module name or file path string after 'from'")),
+            };
+
+            self.consume(TokenKind::Import, "Expected 'import' after 'from <source>'")?;
+
+            let mut symbols = Vec::new();
+            loop {
+                let sym_token = self.advance().clone();
+                let sym_name = match sym_token {
+                    TokenKind::Identifier(id) => id,
+                    _ => return Err(self.error("Expected imported symbol name")),
+                };
+
+                let alias = if self.match_token(TokenKind::As) {
+                    let alias_tok = self.advance().clone();
+                    match alias_tok {
+                        TokenKind::Identifier(a) => Some(a),
+                        _ => return Err(self.error("Expected identifier after 'as'")),
+                    }
+                } else {
+                    None
+                };
+
+                symbols.push((sym_name, alias));
+                if !self.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+
+            self.consume_stmt_end()?;
+            return Ok(Stmt::FromImport { source, symbols });
+        }
+
         if self.match_token(TokenKind::Wo) {
             let expr = self.parse_primary()?;
             self.consume_stmt_end()?;
@@ -443,6 +481,66 @@ impl Parser {
             self.consume(TokenKind::Assign, "Expected '=' after tuple variables")?;
             let expr = self.parse_expression()?;
             return Ok(Stmt::LetTuple(names, expr));
+        } else if self.match_token(TokenKind::LBracket) {
+            let mut names = Vec::new();
+            if !self.check_token(TokenKind::RBracket) {
+                loop {
+                    let name_token = self.advance().clone();
+                    match name_token {
+                        TokenKind::Identifier(n) => names.push(n),
+                        _ => {
+                            return Err(
+                                self.error("Expected variable name in list destructuring")
+                            );
+                        }
+                    }
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.consume(TokenKind::RBracket, "Expected ']' after list variables")?;
+            self.consume(TokenKind::Assign, "Expected '=' after list variables")?;
+            let expr = self.parse_expression()?;
+            return Ok(Stmt::LetList(names, expr));
+        } else if self.match_token(TokenKind::LBrace) {
+            let mut fields = Vec::new();
+            if !self.check_token(TokenKind::RBrace) {
+                loop {
+                    let key_token = self.advance().clone();
+                    let key_name = match key_token {
+                        TokenKind::Identifier(k) => k,
+                        _ => {
+                            return Err(
+                                self.error("Expected property identifier in object destructuring")
+                            );
+                        }
+                    };
+
+                    let var_name = if self.match_token(TokenKind::Colon) {
+                        let alias_tok = self.advance().clone();
+                        match alias_tok {
+                            TokenKind::Identifier(a) => a,
+                            _ => {
+                                return Err(
+                                    self.error("Expected variable name after ':' in object destructuring")
+                                );
+                            }
+                        }
+                    } else {
+                        key_name.clone()
+                    };
+
+                    fields.push((key_name, var_name));
+                    if !self.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.consume(TokenKind::RBrace, "Expected '}' after object destructuring pattern")?;
+            self.consume(TokenKind::Assign, "Expected '=' after object destructuring pattern")?;
+            let expr = self.parse_expression()?;
+            return Ok(Stmt::LetObject(fields, expr));
         } else {
             let name_token = self.advance().clone();
             let name = match name_token {

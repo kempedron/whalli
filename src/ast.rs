@@ -80,6 +80,8 @@ pub enum Expr {
 pub enum Stmt {
     Let(String, Expr, bool), // name, expr, is_pub
     LetTuple(Vec<String>, Expr),
+    LetList(Vec<String>, Expr),
+    LetObject(Vec<(String, String)>, Expr), // (property_name, local_var_name)
     Assign(String, Expr),
     IndexAssign(Expr, Expr, Expr),
     Functions(
@@ -115,6 +117,10 @@ pub enum Stmt {
     ImportFile {
         path: String,
         alias: Option<String>,
+    },
+    FromImport {
+        source: String,
+        symbols: Vec<(String, Option<String>)>, // (remote_name, local_alias)
     },
     Struct(String, Vec<(String, String)>, bool), // name, fields, is_pub
     Impl(String, Vec<Stmt>),

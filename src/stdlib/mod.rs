@@ -8,6 +8,9 @@ mod requests;
 pub mod sql;
 mod sync;
 mod time;
+pub(crate) mod crypto;
+pub(crate) mod ws;
+pub(crate) mod ws_crypto;
 
 use crate::value::{NativeResult, Value};
 use crate::vm::VM;
@@ -105,6 +108,11 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
             NativeResult::Return(val)
         }),
     );
+
+    globals.insert("list".to_string(), Value::Type(Arc::new("list".to_string())));
+    globals.insert("map".to_string(), Value::Type(Arc::new("map".to_string())));
+    globals.insert("chan".to_string(), Value::Type(Arc::new("chan".to_string())));
+    globals.insert("tuple".to_string(), Value::Type(Arc::new("tuple".to_string())));
 
     // new(<type>, <length>, <capacity>)
     // Strict typing: accepts only type identifiers like list, map, chan. Strings are rejected.
@@ -221,6 +229,7 @@ pub fn register_natives(vm: &mut VM) -> (HashMap<String, Value>, HashMap<String,
     modules.insert("requests".to_string(), requests::register(vm));
     modules.insert("http".to_string(), http::register(vm));
     modules.insert("sql".to_string(), sql::register(vm));
+    modules.insert("crypto".to_string(), crypto::register(vm));
 
     (globals, modules)
 }

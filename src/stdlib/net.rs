@@ -48,42 +48,49 @@ pub(crate) fn net_accept(args: Vec<Value>, vm: &mut VM) -> NativeResult {
 
 pub(crate) fn net_write_all(args: Vec<Value>, vm: &mut VM) -> NativeResult {
     if args.len() >= 2 {
-        if let (Value::Int(client_id), Value::Str(data)) = (&args[0], &args[1]) {
-            let client_id = *client_id as usize;
+        let client_id = match &args[0] {
+            Value::Int(id) => *id as usize,
+            _ => return NativeResult::Return(Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Expected client_id integer".to_string()))]))),
+        };
 
-            let mut streams = vm.net.streams.write();
-            let stream = match streams.get_mut(&client_id) {
-                Some(s) => s,
-                None => {
-                    let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Invalid client_id".to_string()))]));
+        let bytes_vec = match &args[1] {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            Value::Bytes(b) => (**b).clone(),
+            other => other.stringify(&vm.heap).into_bytes(),
+        };
+
+        let mut streams = vm.net.streams.write();
+        let stream = match streams.get_mut(&client_id) {
+            Some(s) => s,
+            None => {
+                let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Invalid client_id".to_string()))]));
+                return NativeResult::Return(res);
+            }
+        };
+
+        let bytes = bytes_vec.as_slice();
+        let mut written = 0;
+        while written < bytes.len() {
+            match stream.write(&bytes[written..]) {
+                Ok(0) => {
+                    streams.remove(&client_id);
+                    let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Connection closed by peer".to_string()))]));
                     return NativeResult::Return(res);
                 }
-            };
-
-            let bytes = data.as_bytes();
-            let mut written = 0;
-            while written < bytes.len() {
-                match stream.write(&bytes[written..]) {
-                    Ok(0) => {
-                        streams.remove(&client_id);
-                        let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Connection closed by peer".to_string()))]));
-                        return NativeResult::Return(res);
-                    }
-                    Ok(n) => written += n,
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        return NativeResult::SuspendIO(Token(client_id));
-                    }
-                    Err(e) => {
-                        streams.remove(&client_id);
-                        let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new(e.to_string()))]));
-                        return NativeResult::Return(res);
-                    }
+                Ok(n) => written += n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return NativeResult::SuspendIO(Token(client_id));
+                }
+                Err(e) => {
+                    streams.remove(&client_id);
+                    let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new(e.to_string()))]));
+                    return NativeResult::Return(res);
                 }
             }
-
-            let res = Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil]));
-            return NativeResult::Return(res);
         }
+
+        let res = Value::Tuple(Arc::new(vec![Value::Bool(true), Value::Nil]));
+        return NativeResult::Return(res);
     }
     let res = Value::Tuple(Arc::new(vec![Value::Bool(false), Value::Str(Arc::new("Expected client_id and data string".to_string()))]));
     NativeResult::Return(res)
@@ -107,6 +114,7 @@ pub(crate) fn net_close(args: Vec<Value>, vm: &mut VM) -> NativeResult {
     if let Some(Value::Int(id)) = args.first() {
         let id = *id as usize;
         let mut closed = false;
+        vm.net.stream_buffers.lock().remove(&id);
         if let Some(mut stream) = vm.net.streams.write().remove(&id) {
             let poller = vm.net.poll.lock();
             let _ = poller.registry().deregister(&mut stream);

@@ -50,6 +50,7 @@ pub enum TokenKind {
     Break,
     Continue,
     Import,
+    From,
     As,
     Pub,
     Struct,
@@ -283,54 +284,212 @@ impl Lexer {
                     self.pos += 1;
                 }
                 'b' => {
-                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
-                        self.pos += 2;
-                        let mut bytes = Vec::new();
-                        while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
-                            let ch = self.chars[self.pos];
-                            if ch == '\\' {
-                                self.pos += 1;
-                                if self.pos < self.chars.len() {
-                                    match self.chars[self.pos] {
-                                        'n' => bytes.push(b'\n'),
-                                        'r' => bytes.push(b'\r'),
-                                        't' => bytes.push(b'\t'),
-                                        '0' => bytes.push(0),
-                                        '\\' => bytes.push(b'\\'),
-                                        '"' => bytes.push(b'"'),
-                                        'x' => {
-                                            if self.pos + 2 < self.chars.len() {
-                                                let h1 = self.chars[self.pos + 1];
-                                                let h2 = self.chars[self.pos + 2];
-                                                let hex_str: String = [h1, h2].iter().collect();
-                                                if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
-                                                    bytes.push(byte_val);
-                                                    self.pos += 2;
-                                                } else {
-                                                    bytes.push(b'x');
-                                                }
-                                            } else {
-                                                bytes.push(b'x');
-                                            }
-                                        }
-                                        other => {
-                                            let mut buf = [0; 4];
-                                            for b in other.encode_utf8(&mut buf).bytes() {
-                                                bytes.push(b);
-                                            }
-                                        }
-                                    }
+                    // Check for raw bytes br"..." or br"""..."""
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == 'r'
+                        && self.pos + 2 < self.chars.len() && self.chars[self.pos + 2] == '"'
+                    {
+                        // Check if triple quote br"""
+                        if self.pos + 4 < self.chars.len() && self.chars[self.pos + 3] == '"' && self.chars[self.pos + 4] == '"' {
+                            self.pos += 5;
+                            let mut bytes = Vec::new();
+                            while self.pos < self.chars.len() {
+                                if self.chars[self.pos] == '"'
+                                    && self.pos + 2 < self.chars.len()
+                                    && self.chars[self.pos + 1] == '"'
+                                    && self.chars[self.pos + 2] == '"'
+                                {
+                                    self.pos += 3;
+                                    break;
                                 }
-                            } else {
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
                                 let mut buf = [0; 4];
                                 for b in ch.encode_utf8(&mut buf).bytes() {
                                     bytes.push(b);
                                 }
+                                self.pos += 1;
                             }
-                            self.pos += 1;
+                            tokens.push(self.make_token(TokenKind::Bytes(bytes)));
+                        } else {
+                            // Single line raw bytes br"..."
+                            self.pos += 3;
+                            let mut bytes = Vec::new();
+                            while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
+                                let mut buf = [0; 4];
+                                for b in ch.encode_utf8(&mut buf).bytes() {
+                                    bytes.push(b);
+                                }
+                                self.pos += 1;
+                            }
+                            if self.pos < self.chars.len() {
+                                self.pos += 1; // skip closing "
+                            }
+                            tokens.push(self.make_token(TokenKind::Bytes(bytes)));
                         }
-                        self.pos += 1; // skip closing "
-                        tokens.push(self.make_token(TokenKind::Bytes(bytes)));
+                    } else if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
+                        // Check if multiline bytes b"""..."""
+                        if self.pos + 3 < self.chars.len() && self.chars[self.pos + 2] == '"' && self.chars[self.pos + 3] == '"' {
+                            self.pos += 4;
+                            let mut bytes = Vec::new();
+                            while self.pos < self.chars.len() {
+                                if self.chars[self.pos] == '"'
+                                    && self.pos + 2 < self.chars.len()
+                                    && self.chars[self.pos + 1] == '"'
+                                    && self.chars[self.pos + 2] == '"'
+                                {
+                                    self.pos += 3;
+                                    break;
+                                }
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
+                                if ch == '\\' {
+                                    self.pos += 1;
+                                    if self.pos < self.chars.len() {
+                                        match self.chars[self.pos] {
+                                            'n' => bytes.push(b'\n'),
+                                            'r' => bytes.push(b'\r'),
+                                            't' => bytes.push(b'\t'),
+                                            '0' => bytes.push(0),
+                                            '\\' => bytes.push(b'\\'),
+                                            '"' => bytes.push(b'"'),
+                                            'x' => {
+                                                if self.pos + 2 < self.chars.len() {
+                                                    let h1 = self.chars[self.pos + 1];
+                                                    let h2 = self.chars[self.pos + 2];
+                                                    let hex_str: String = [h1, h2].iter().collect();
+                                                    if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
+                                                        bytes.push(byte_val);
+                                                        self.pos += 2;
+                                                    } else {
+                                                        bytes.push(b'x');
+                                                    }
+                                                } else {
+                                                    bytes.push(b'x');
+                                                }
+                                            }
+                                            other => {
+                                                let mut buf = [0; 4];
+                                                for b in other.encode_utf8(&mut buf).bytes() {
+                                                    bytes.push(b);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let mut buf = [0; 4];
+                                    for b in ch.encode_utf8(&mut buf).bytes() {
+                                        bytes.push(b);
+                                    }
+                                }
+                                self.pos += 1;
+                            }
+                            tokens.push(self.make_token(TokenKind::Bytes(bytes)));
+                        } else {
+                            self.pos += 2;
+                            let mut bytes = Vec::new();
+                            while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+                                let ch = self.chars[self.pos];
+                                if ch == '\\' {
+                                    self.pos += 1;
+                                    if self.pos < self.chars.len() {
+                                        match self.chars[self.pos] {
+                                            'n' => bytes.push(b'\n'),
+                                            'r' => bytes.push(b'\r'),
+                                            't' => bytes.push(b'\t'),
+                                            '0' => bytes.push(0),
+                                            '\\' => bytes.push(b'\\'),
+                                            '"' => bytes.push(b'"'),
+                                            'x' => {
+                                                if self.pos + 2 < self.chars.len() {
+                                                    let h1 = self.chars[self.pos + 1];
+                                                    let h2 = self.chars[self.pos + 2];
+                                                    let hex_str: String = [h1, h2].iter().collect();
+                                                    if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
+                                                        bytes.push(byte_val);
+                                                        self.pos += 2;
+                                                    } else {
+                                                        bytes.push(b'x');
+                                                    }
+                                                } else {
+                                                    bytes.push(b'x');
+                                                }
+                                            }
+                                            other => {
+                                                let mut buf = [0; 4];
+                                                for b in other.encode_utf8(&mut buf).bytes() {
+                                                    bytes.push(b);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let mut buf = [0; 4];
+                                    for b in ch.encode_utf8(&mut buf).bytes() {
+                                        bytes.push(b);
+                                    }
+                                }
+                                self.pos += 1;
+                            }
+                            if self.pos < self.chars.len() {
+                                self.pos += 1; // skip closing "
+                            }
+                            tokens.push(self.make_token(TokenKind::Bytes(bytes)));
+                        }
+                    } else {
+                        let word = self.read_word();
+                        let kind = Self::ident_or_keyword(word);
+                        tokens.push(self.make_token(kind));
+                    }
+                }
+                'r' => {
+                    // Check for raw string r"..." or r"""..."""
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
+                        // Check if triple quote r"""
+                        if self.pos + 3 < self.chars.len() && self.chars[self.pos + 2] == '"' && self.chars[self.pos + 3] == '"' {
+                            self.pos += 4;
+                            let mut s = String::new();
+                            while self.pos < self.chars.len() {
+                                if self.chars[self.pos] == '"'
+                                    && self.pos + 2 < self.chars.len()
+                                    && self.chars[self.pos + 1] == '"'
+                                    && self.chars[self.pos + 2] == '"'
+                                {
+                                    self.pos += 3;
+                                    break;
+                                }
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
+                                s.push(ch);
+                                self.pos += 1;
+                            }
+                            tokens.push(self.make_token(TokenKind::Str(s)));
+                        } else {
+                            // Single line raw string r"..."
+                            self.pos += 2;
+                            let mut s = String::new();
+                            while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
+                                s.push(ch);
+                                self.pos += 1;
+                            }
+                            if self.pos < self.chars.len() {
+                                self.pos += 1; // skip closing "
+                            }
+                            tokens.push(self.make_token(TokenKind::Str(s)));
+                        }
                     } else {
                         let word = self.read_word();
                         let kind = Self::ident_or_keyword(word);
@@ -339,7 +498,121 @@ impl Lexer {
                 }
                 'f' => {
                     if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
-                        self.pos += 2;
+                        // Check if multiline f-string f"""..."""
+                        if self.pos + 3 < self.chars.len() && self.chars[self.pos + 2] == '"' && self.chars[self.pos + 3] == '"' {
+                            self.pos += 4;
+                            let mut s = String::new();
+                            while self.pos < self.chars.len() {
+                                if self.chars[self.pos] == '"'
+                                    && self.pos + 2 < self.chars.len()
+                                    && self.chars[self.pos + 1] == '"'
+                                    && self.chars[self.pos + 2] == '"'
+                                {
+                                    self.pos += 3;
+                                    break;
+                                }
+                                let ch = self.chars[self.pos];
+                                if ch == '\n' {
+                                    self.line += 1;
+                                }
+                                if ch == '\\' {
+                                    self.pos += 1;
+                                    if self.pos < self.chars.len() {
+                                        match self.chars[self.pos] {
+                                            'n' => s.push('\n'),
+                                            'r' => s.push('\r'),
+                                            't' => s.push('\t'),
+                                            '\\' => s.push('\\'),
+                                            '"' => s.push('"'),
+                                            other => {
+                                                s.push('\\');
+                                                s.push(other);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    s.push(ch);
+                                }
+                                self.pos += 1;
+                            }
+                            tokens.push(self.make_token(TokenKind::FStr(s)));
+                        } else {
+                            self.pos += 2;
+                            let mut s = String::new();
+                            while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+                                let ch = self.chars[self.pos];
+                                if ch == '\\' {
+                                    self.pos += 1;
+                                    if self.pos < self.chars.len() {
+                                        match self.chars[self.pos] {
+                                            'n' => s.push('\n'),
+                                            'r' => s.push('\r'),
+                                            't' => s.push('\t'),
+                                            '\\' => s.push('\\'),
+                                            '"' => s.push('"'),
+                                            other => {
+                                                s.push('\\');
+                                                s.push(other);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    s.push(ch);
+                                }
+                                self.pos += 1;
+                            }
+                            if self.pos < self.chars.len() {
+                                self.pos += 1; // skip closing "
+                            }
+                            tokens.push(self.make_token(TokenKind::FStr(s)));
+                        }
+                    } else {
+                        let word = self.read_word();
+                        let kind = Self::ident_or_keyword(word);
+                        tokens.push(self.make_token(kind));
+                    }
+                }
+                '"' => {
+                    // Check if multiline string """..."""
+                    if self.pos + 2 < self.chars.len() && self.chars[self.pos + 1] == '"' && self.chars[self.pos + 2] == '"' {
+                        self.pos += 3;
+                        let mut s = String::new();
+                        while self.pos < self.chars.len() {
+                            if self.chars[self.pos] == '"'
+                                && self.pos + 2 < self.chars.len()
+                                && self.chars[self.pos + 1] == '"'
+                                && self.chars[self.pos + 2] == '"'
+                            {
+                                self.pos += 3;
+                                break;
+                            }
+                            let ch = self.chars[self.pos];
+                            if ch == '\n' {
+                                self.line += 1;
+                            }
+                            if ch == '\\' {
+                                self.pos += 1;
+                                if self.pos < self.chars.len() {
+                                    match self.chars[self.pos] {
+                                        'n' => s.push('\n'),
+                                        'r' => s.push('\r'),
+                                        't' => s.push('\t'),
+                                        '\\' => s.push('\\'),
+                                        '"' => s.push('"'),
+                                        other => {
+                                            s.push('\\');
+                                            s.push(other);
+                                        }
+                                    }
+                                }
+                            } else {
+                                s.push(ch);
+                            }
+                            self.pos += 1;
+                        }
+                        tokens.push(self.make_token(TokenKind::Str(s)));
+                    } else {
+                        self.pos += 1;
                         let mut s = String::new();
                         while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
                             let ch = self.chars[self.pos];
@@ -363,41 +636,11 @@ impl Lexer {
                             }
                             self.pos += 1;
                         }
-                        self.pos += 1;
-                        tokens.push(self.make_token(TokenKind::FStr(s)));
-                    } else {
-                        let word = self.read_word();
-                        let kind = Self::ident_or_keyword(word);
-                        tokens.push(self.make_token(kind));
-                    }
-                }
-                '"' => {
-                    self.pos += 1;
-                    let mut s = String::new();
-                    while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
-                        let ch = self.chars[self.pos];
-                        if ch == '\\' {
-                            self.pos += 1;
-                            if self.pos < self.chars.len() {
-                                match self.chars[self.pos] {
-                                    'n' => s.push('\n'),
-                                    'r' => s.push('\r'),
-                                    't' => s.push('\t'),
-                                    '\\' => s.push('\\'),
-                                    '"' => s.push('"'),
-                                    other => {
-                                        s.push('\\');
-                                        s.push(other);
-                                    }
-                                }
-                            }
-                        } else {
-                            s.push(ch);
+                        if self.pos < self.chars.len() {
+                            self.pos += 1; // skip closing "
                         }
-                        self.pos += 1;
+                        tokens.push(self.make_token(TokenKind::Str(s)));
                     }
-                    self.pos += 1;
-                    tokens.push(self.make_token(TokenKind::Str(s)));
                 }
 
                 c if c.is_ascii_digit() => {
@@ -436,6 +679,7 @@ impl Lexer {
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "import" => TokenKind::Import,
+            "from" => TokenKind::From,
             "as" => TokenKind::As,
             "pub" => TokenKind::Pub,
             "struct" => TokenKind::Struct,

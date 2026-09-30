@@ -66,10 +66,26 @@ pub struct ChannelTimer {
     pub chan_id: usize,
 }
 
+static GLOBAL_NET: std::sync::OnceLock<Arc<NetworkState>> = std::sync::OnceLock::new();
+
+pub fn global_net() -> Arc<NetworkState> {
+    GLOBAL_NET.get_or_init(|| {
+        Arc::new(NetworkState {
+            poll: Mutex::new(Poll::new().unwrap()),
+            listeners: RwLock::new(HashMap::new()),
+            streams: RwLock::new(HashMap::new()),
+            stream_buffers: Mutex::new(HashMap::new()),
+            next_token: AtomicUsize::new(1),
+            closed_tokens: Mutex::new(Vec::new()),
+        })
+    }).clone()
+}
+
 pub struct NetworkState {
     pub poll: Mutex<Poll>,
     pub listeners: RwLock<HashMap<usize, TcpListener>>,
     pub streams: RwLock<HashMap<usize, TcpStream>>,
+    pub stream_buffers: Mutex<HashMap<usize, Vec<u8>>>,
     pub next_token: AtomicUsize,
     pub closed_tokens: Mutex<Vec<usize>>,
 }
@@ -101,7 +117,7 @@ struct SharedRuntime {
 }
 
 pub struct VM {
-    main_task: Option<Task>,
+    pub main_task: Option<Task>,
     pub globals: HashMap<String, Value>,
     pub modules: HashMap<String, Value>,
     pub heap: heap::Heap,
@@ -190,6 +206,22 @@ fn is_type_match(heap: &heap::Heap, globals: &HashMap<String, Value>, obj: &Valu
     let type_name_opt = match type_val {
         Value::Type(t) => Some(t.as_str()),
         Value::Str(s) => Some(s.as_str()),
+        Value::Native(_) => {
+            // Check if native global matches primitive type functions: int, float, str, bytes, bool
+            for (name, val) in globals {
+                if val == type_val {
+                    return match (obj, name.as_str()) {
+                        (Value::Int(_), "int") => true,
+                        (Value::Float(_), "float") => true,
+                        (Value::Str(_), "str") => true,
+                        (Value::Bytes(_), "bytes") => true,
+                        (Value::Bool(_), "bool") => true,
+                        _ => false,
+                    };
+                }
+            }
+            None
+        }
         _ => None,
     };
 
@@ -279,13 +311,21 @@ fn is_type_match(heap: &heap::Heap, globals: &HashMap<String, Value>, obj: &Valu
 
 impl VM {
     pub fn new(instructions: Vec<OpCode>) -> Self {
-        let main_func = Arc::new(FunctionObj {
+        let mut constants = vec![];
+        let bytecode = crate::opcode::serialize_chunk(&instructions, &mut constants);
+        Self::new_with_function(FunctionObj {
             name: "main".to_string(),
             arity: 0,
             chunk: instructions,
+            bytecode,
+            constants,
             param_types: vec![],
             return_type: None,
-        });
+        })
+    }
+
+    pub fn new_with_function(func_obj: FunctionObj) -> Self {
+        let main_func = Arc::new(func_obj);
 
         let heap = heap::Heap::new();
         let main_closure_id = heap.alloc(heap::Obj::Closure(main_func.clone(), vec![]));
@@ -311,6 +351,7 @@ impl VM {
             poll: Mutex::new(Poll::new().unwrap()),
             listeners: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
+            stream_buffers: Mutex::new(HashMap::new()),
             next_token: AtomicUsize::new(1),
             closed_tokens: Mutex::new(Vec::new()),
         });
@@ -327,15 +368,7 @@ impl VM {
             channel_timers: Arc::new(Mutex::new(Vec::new())),
         };
 
-        let (mut globals, modules) = crate::stdlib::register_natives(&mut vm);
-        let builtins = ["int", "float", "str", "bytes", "bool", "list", "map", "func", "chan"];
-        for builtin in builtins {
-            globals.insert(
-                builtin.to_string(),
-                Value::Type(Arc::new(builtin.to_string())),
-            );
-        }
-
+        let (globals, modules) = crate::stdlib::register_natives(&mut vm);
         vm.globals = globals;
         vm.modules = modules;
         vm
@@ -746,17 +779,21 @@ fn run_worker_loop(
 
                 if !has_sleepers && !has_timers && !has_io {
                     idle_spins += 1;
-                    if idle_spins > 50 {
-                        let mut err_guard = shared.fatal_error.lock();
-                        if err_guard.is_none() {
-                            *err_guard = Some(RuntimeError {
-                                message: "fatal error: all woroutines are asleep - deadlock!".to_string(),
-                                line: 1,
-                            });
+                    if idle_spins > 500 {
+                        let active = shared.active_tasks.load(Ordering::Relaxed);
+                        let waiting_count = shared.waiting_io_tasks.lock().len() + shared.sleeping_tasks.lock().len();
+                        if active > 0 && waiting_count > 0 && shared.injector.is_empty() {
+                            let mut err_guard = shared.fatal_error.lock();
+                            if err_guard.is_none() {
+                                *err_guard = Some(RuntimeError {
+                                    message: "fatal error: all woroutines are asleep - deadlock!".to_string(),
+                                    line: 1,
+                                });
+                            }
+                            shared.shutdown.store(true, Ordering::Relaxed);
+                            shared.condvar.notify_all();
+                            break;
                         }
-                        shared.shutdown.store(true, Ordering::Relaxed);
-                        shared.condvar.notify_all();
-                        break;
                     }
                 } else {
                     idle_spins = 0;
@@ -775,8 +812,8 @@ fn run_worker_loop(
                 shared.condvar.notify_all();
             }
             SliceResult::Exhausted(t) => {
-                local_worker.push(t);
-                shared.condvar.notify_one();
+                shared.injector.push(t);
+                shared.condvar.notify_all();
             }
             SliceResult::Parked(t) => {
                 shared.injector.push(t);
@@ -851,30 +888,35 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
         }
 
         let frame_idx = current_task.frames.len() - 1;
-        if current_task.frames[frame_idx].ip >= current_task.frames[frame_idx].function.chunk.len() {
+
+        let ip = current_task.frames[frame_idx].ip;
+        let chunk_len = current_task.frames[frame_idx].function.chunk.len();
+        if ip >= chunk_len {
             current_task.frames.pop();
             continue;
         }
 
-        let instruction = current_task.frames[frame_idx].function.chunk
-            [current_task.frames[frame_idx].ip]
-            .clone();
         current_task.frames[frame_idx].ip += 1;
+        let instruction = current_task.frames[frame_idx].function.chunk[ip].clone();
 
         match instruction {
             OpCode::Push(val) => {
+                current_task.stack.push(val.clone());
+            }
+            OpCode::Constant(idx) => {
+                let val = current_task.frames[frame_idx].function.constants[idx].clone();
                 current_task.stack.push(val);
             }
             OpCode::Add => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x + y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x + y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) + y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) + y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x + (*y as f64))),
                     (Value::Bytes(x), Value::Bytes(y)) => {
-                        let mut combined: Vec<u8> = (*x).to_vec();
+                        let mut combined: Vec<u8> = (**x).clone();
                         combined.extend_from_slice(y.as_slice());
                         current_task.stack.push(Value::Bytes(Arc::new(combined)));
                     }
@@ -893,57 +935,104 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
             OpCode::Sub => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x - y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x - y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) - y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) - y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x - (*y as f64))),
                     _ => fail!("Invalid types for '-' operation"),
                 }
             }
             OpCode::Mul => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
+                match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x * y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x * y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) * y)),
-                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (y as f64))),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) * y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x * (*y as f64))),
                     _ => fail!("Invalid types for '*' operation"),
                 }
             }
             OpCode::Div => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
-                    (Value::Int(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Division by zero"); }
-                        current_task.stack.push(Value::Int(x / y));
+                match (&a, &b) {
+                    (Value::Int(_), Value::Int(0)) | (Value::Float(_), Value::Float(0.0)) => {
+                        fail!("Zero division error");
                     }
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x / y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x / y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) / y)),
-                    (Value::Float(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Division by zero"); }
-                        current_task.stack.push(Value::Float(x / (y as f64)));
-                    }
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) / y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x / (*y as f64))),
                     _ => fail!("Invalid types for '/' operation"),
                 }
             }
             OpCode::Mod => {
                 let b = pop!();
                 let a = pop!();
-                match (a, b) {
-                    (Value::Int(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Modulo by zero"); }
-                        current_task.stack.push(Value::Int(x % y));
+                match (&a, &b) {
+                    (Value::Int(_), Value::Int(0)) => {
+                        fail!("Zero division error in modulo");
                     }
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Int(x % y)),
                     (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Float(x % y)),
-                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((x as f64) % y)),
-                    (Value::Float(x), Value::Int(y)) => {
-                        if y == 0 { fail!("Modulo by zero"); }
-                        current_task.stack.push(Value::Float(x % (y as f64)));
-                    }
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Float((*x as f64) % y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Float(x % (*y as f64))),
                     _ => fail!("Invalid types for '%' operation"),
+                }
+            }
+            OpCode::Equal => {
+                let b = pop!();
+                let a = pop!();
+                current_task.stack.push(Value::Bool(a == b));
+            }
+            OpCode::Less => {
+                let b = pop!();
+                let a = pop!();
+                match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Bool(x < y)),
+                    (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Bool(x < y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Bool((*x as f64) < *y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Bool(*x < (*y as f64))),
+                    (Value::Str(x), Value::Str(y)) => current_task.stack.push(Value::Bool(x < y)),
+                    _ => fail!("Invalid types for '<' operation"),
+                }
+            }
+            OpCode::Greater => {
+                let b = pop!();
+                let a = pop!();
+                match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Bool(x > y)),
+                    (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Bool(x > y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Bool((*x as f64) > *y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Bool(*x > (*y as f64))),
+                    (Value::Str(x), Value::Str(y)) => current_task.stack.push(Value::Bool(x > y)),
+                    _ => fail!("Invalid types for '>' operation"),
+                }
+            }
+            OpCode::LessEqual => {
+                let b = pop!();
+                let a = pop!();
+                match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Bool(x <= y)),
+                    (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Bool(x <= y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Bool((*x as f64) <= *y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Bool(*x <= (*y as f64))),
+                    (Value::Str(x), Value::Str(y)) => current_task.stack.push(Value::Bool(x <= y)),
+                    _ => fail!("Invalid types for '<=' operation"),
+                }
+            }
+            OpCode::GreaterEqual => {
+                let b = pop!();
+                let a = pop!();
+                match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => current_task.stack.push(Value::Bool(x >= y)),
+                    (Value::Float(x), Value::Float(y)) => current_task.stack.push(Value::Bool(x >= y)),
+                    (Value::Int(x), Value::Float(y)) => current_task.stack.push(Value::Bool((*x as f64) >= *y)),
+                    (Value::Float(x), Value::Int(y)) => current_task.stack.push(Value::Bool(*x >= (*y as f64))),
+                    (Value::Str(x), Value::Str(y)) => current_task.stack.push(Value::Bool(x >= y)),
+                    _ => fail!("Invalid types for '>=' operation"),
                 }
             }
             OpCode::StoreGlobal(name) => {
@@ -957,15 +1046,24 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                     fail!("Undefined variable '{}'", name);
                 }
             }
-            OpCode::LoadLocal(idx) => {
-                let offset = current_task.frames[frame_idx].stack_offset;
-                let val = current_task.stack[offset + idx].clone();
-                current_task.stack.push(val);
-            }
             OpCode::SetLocal(idx) => {
                 let val = pop!();
                 let offset = current_task.frames[frame_idx].stack_offset;
-                current_task.stack[offset + idx] = val;
+                let target_index = offset + idx;
+                if target_index >= current_task.stack.len() {
+                    current_task.stack.resize(target_index + 1, Value::Nil);
+                }
+                current_task.stack[target_index] = val;
+            }
+            OpCode::LoadLocal(idx) => {
+                let offset = current_task.frames[frame_idx].stack_offset;
+                let target_index = offset + idx;
+                let val = if target_index < current_task.stack.len() {
+                    current_task.stack[target_index].clone()
+                } else {
+                    Value::Nil
+                };
+                current_task.stack.push(val);
             }
             OpCode::Call(arg_count) => {
                 let callee_index = current_task.stack.len() - arg_count - 1;
@@ -1058,6 +1156,115 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         }
                     }
                     _ => fail!("Attempt to call a non-function value"),
+                }
+            }
+            OpCode::TailCall(arg_count) => {
+                let callee_index = current_task.stack.len() - arg_count - 1;
+                let callee = current_task.stack[callee_index].clone();
+
+                let has_defers = !current_task.frames[frame_idx].defers.is_empty();
+
+                if let Value::ObjRef(id) = callee {
+                    let obj = match shared.heap.get(id) {
+                        Ok(o) => o,
+                        Err(e) => fail!("{}", e),
+                    };
+                    if let heap::Obj::Closure(func, _) = obj {
+                        if func.arity != arg_count {
+                            fail!("Function '{}' expects {} arguments, got {}", func.name, func.arity, arg_count);
+                        }
+
+                        if !has_defers {
+                            let mut args = Vec::with_capacity(arg_count);
+                            for _ in 0..arg_count {
+                                args.push(pop!());
+                            }
+                            args.reverse();
+                            pop!(); // pop callee
+
+                            let base = current_task.frames[frame_idx].base_offset;
+                            current_task.stack.truncate(base);
+                            current_task.stack.push(Value::ObjRef(id));
+                            for a in args {
+                                current_task.stack.push(a);
+                            }
+
+                            current_task.frames[frame_idx].closure_id = id;
+                            current_task.frames[frame_idx].function = func.clone();
+                            current_task.frames[frame_idx].ip = 0;
+                            current_task.frames[frame_idx].stack_offset = base + 1;
+                            continue;
+                        } else {
+                            let new_frame = CallFrame {
+                                closure_id: id,
+                                function: func.clone(),
+                                ip: 0,
+                                stack_offset: callee_index + 1,
+                                base_offset: callee_index,
+                                defers: Vec::new(),
+                            };
+                            current_task.frames.push(new_frame);
+                        }
+                    } else {
+                        let new_frame = CallFrame {
+                            closure_id: id,
+                            function: Arc::new(FunctionObj {
+                                name: "struct_init".to_string(),
+                                arity: arg_count,
+                                chunk: vec![],
+                                bytecode: vec![],
+                                constants: vec![],
+                                param_types: vec![],
+                                return_type: None,
+                            }),
+                            ip: 0,
+                            stack_offset: callee_index + 1,
+                            base_offset: callee_index,
+                            defers: Vec::new(),
+                        };
+                        current_task.frames.push(new_frame);
+                    }
+                } else if let Value::Native(native_fn) = callee {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(pop!());
+                    }
+                    args.reverse();
+                    pop!();
+
+                    let mut temp_vm = VM {
+                        main_task: None,
+                        globals: shared.globals.read().clone(),
+                        modules: shared.modules.read().clone(),
+                        heap: shared.heap.clone(),
+                        current_line,
+                        gc_threshold: shared.gc_threshold.load(Ordering::Relaxed),
+                        imported_files: HashSet::new(),
+                        net: Arc::clone(&shared.net),
+                        channel_timers: Arc::clone(&shared.channel_timers),
+                    };
+
+                    match native_fn(args.clone(), &mut temp_vm) {
+                        crate::value::NativeResult::Return(val) => {
+                            current_task.stack.push(val);
+                        }
+                        crate::value::NativeResult::SuspendSleep(secs) => {
+                            let wake = Instant::now() + Duration::from_secs_f64(secs);
+                            current_task.stack.push(Value::Nil);
+                            return SliceResult::Sleep(current_task, wake);
+                        }
+                        crate::value::NativeResult::SuspendIO(token) => {
+                            current_task.frames[frame_idx].ip -= 1;
+                            current_task.stack.push(callee);
+                            for arg in args {
+                                current_task.stack.push(arg);
+                            }
+                            current_task.state = TaskState::WaitingIO(token);
+                            return SliceResult::WaitIO(current_task);
+                        }
+                    }
+                } else {
+                    fail!("Attempt to call a non-callable value: {:?}", callee);
                 }
             }
             OpCode::MethodCall(method_name, arg_count) => {
@@ -1531,7 +1738,9 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                                 fail!("Tuple index must be an integer");
                             }
                         }
-                        _ => fail!("Invalid target for reading index"),
+                        _ => {
+                            fail!("Invalid target for reading index (target is {:?})", collection);
+                        }
                     }
                 }
                 OpCode::IndexSet => {
@@ -1636,9 +1845,9 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         };
 
                         let compiler = crate::compiler::Compiler::new_module(alias.as_str().to_string());
-                        let bytecode = compiler.compile(&ast);
+                        let func_obj = compiler.compile_function(&ast);
 
-                        let mut module_vm = VM::new(bytecode);
+                        let mut module_vm = VM::new_with_function(func_obj);
                         // Share the same runtime heap and modules
                         module_vm.heap = shared.heap.clone();
                         module_vm.modules = shared.modules.read().clone();
@@ -1668,6 +1877,126 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                             .unwrap_or(Value::Nil);
                         shared.loaded_modules.write().insert(canonical, module_obj.clone());
                         shared.globals.write().insert(alias.as_str().to_string(), module_obj);
+                    }
+                }
+                OpCode::FromImport { source, symbols } => {
+                    let source_str = source.as_str();
+                    let module_val = if let Some(std_mod) = shared.modules.read().get(source_str).cloned() {
+                        std_mod
+                    } else {
+                        // Treat as file path
+                        let path = PathBuf::from(source_str);
+                        let resolved = if path.is_relative() {
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&path)
+                        } else {
+                            path.clone()
+                        };
+
+                        let target_file = if resolved.is_dir() {
+                            let mod_file = resolved.join("mod.wh");
+                            if !mod_file.exists() {
+                                fail!("Cannot find module entry 'mod.wh' in directory '{}'", source_str);
+                            }
+                            mod_file
+                        } else if resolved.exists() {
+                            resolved
+                        } else {
+                            let with_ext = resolved.with_extension("wh");
+                            if with_ext.exists() {
+                                with_ext
+                            } else {
+                                fail!("Cannot import from '{}': Module or file not found", source_str);
+                            }
+                        };
+
+                        let canonical = match target_file.canonicalize() {
+                            Ok(c) => c,
+                            Err(e) => fail!("Cannot import from '{}': {}", source_str, e),
+                        };
+
+                        let cached = shared.loaded_modules.read().get(&canonical).cloned();
+                        if let Some(m) = cached {
+                            m
+                        } else {
+                            let src = match std::fs::read_to_string(&canonical) {
+                                Ok(s) => s,
+                                Err(e) => fail!("Cannot read import file '{}': {}", source_str, e),
+                            };
+
+                            let mut lexer = crate::lexer::Lexer::new(&src);
+                            let tokens = match lexer.tokenize() {
+                                Ok(t) => t,
+                                Err(e) => fail!("Lexer error in import: {}", e.message),
+                            };
+
+                            let mut parser = crate::parser::Parser::new(tokens);
+                            let ast = match parser.parse() {
+                                Ok(a) => a,
+                                Err(e) => fail!("Syntax error in import: {}", e.message),
+                            };
+
+                            let default_alias = {
+                                let p = std::path::Path::new(source_str);
+                                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("module");
+                                stem.to_string()
+                            };
+
+                            let compiler = crate::compiler::Compiler::new_module(default_alias);
+                            let func_obj = compiler.compile_function(&ast);
+
+                            let mut module_vm = VM::new_with_function(func_obj);
+                            module_vm.heap = shared.heap.clone();
+                            module_vm.modules = shared.modules.read().clone();
+                            module_vm.net = Arc::clone(&shared.net);
+                            module_vm.channel_timers = Arc::clone(&shared.channel_timers);
+
+                            if let Err(err) = module_vm.run() {
+                                fail!("Error evaluating module '{}': {}", source_str, err.message);
+                            }
+
+                            {
+                                let mut current_globals = shared.globals.write();
+                                for (k, v) in &module_vm.globals {
+                                    if k != "$$module_result$$" && !k.starts_with("$$") {
+                                        let internal_key = format!("{}::{}", canonical.display(), k);
+                                        current_globals.insert(internal_key, v.clone());
+                                    }
+                                }
+                            }
+
+                            let mod_obj = module_vm.globals.get("$$module_result$$")
+                                .cloned()
+                                .unwrap_or(Value::Nil);
+                            shared.loaded_modules.write().insert(canonical, mod_obj.clone());
+                            mod_obj
+                        }
+                    };
+
+                    // Extract requested symbols from module Map
+                    match module_val {
+                        Value::ObjRef(id) => {
+                            let map_opt = shared.heap.with_read(id, |o| {
+                                if let heap::Obj::Map(m) = o {
+                                    Some(m.clone())
+                                } else {
+                                    None
+                                }
+                            }).ok().flatten();
+
+                            if let Some(m) = map_opt {
+                                let mut globals = shared.globals.write();
+                                for (sym, target_var) in symbols.iter() {
+                                    if let Some(val) = m.get(sym.as_str()) {
+                                        globals.insert(target_var.clone(), val.clone());
+                                    } else {
+                                        fail!("Symbol '{}' not found in module '{}'", sym, source_str);
+                                    }
+                                }
+                            } else {
+                                fail!("Module '{}' did not evaluate to an exported object", source_str);
+                            }
+                        }
+                        _ => fail!("Module '{}' did not evaluate to an exported object", source_str),
                     }
                 }
                 OpCode::Export(name) => {
@@ -1842,59 +2171,6 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                 OpCode::Jump(target_ip) => {
                     current_task.frames[frame_idx].ip = target_ip;
                 }
-                OpCode::Equal => {
-                    let b = pop!();
-                    let a = pop!();
-                    current_task.stack.push(Value::Bool(a == b));
-                }
-                OpCode::Less => {
-                    let b = pop!();
-                    let a = pop!();
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x < y,
-                        (Value::Float(x), Value::Float(y)) => x < y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) < y,
-                        (Value::Float(x), Value::Int(y)) => x < (y as f64),
-                        _ => fail!("Invalid types for '<' operation"),
-                    };
-                    current_task.stack.push(Value::Bool(res));
-                }
-                OpCode::Greater => {
-                    let b = pop!();
-                    let a = pop!();
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x > y,
-                        (Value::Float(x), Value::Float(y)) => x > y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) > y,
-                        (Value::Float(x), Value::Int(y)) => x > (y as f64),
-                        _ => fail!("Invalid types for '>' operation"),
-                    };
-                    current_task.stack.push(Value::Bool(res));
-                }
-                OpCode::LessEqual => {
-                    let b = pop!();
-                    let a = pop!();
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x <= y,
-                        (Value::Float(x), Value::Float(y)) => x <= y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) <= y,
-                        (Value::Float(x), Value::Int(y)) => x <= (y as f64),
-                        _ => fail!("Invalid types for '<=' operation"),
-                    };
-                    current_task.stack.push(Value::Bool(res));
-                }
-                OpCode::GreaterEqual => {
-                    let b = pop!();
-                    let a = pop!();
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x >= y,
-                        (Value::Float(x), Value::Float(y)) => x >= y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) >= y,
-                        (Value::Float(x), Value::Int(y)) => x >= (y as f64),
-                        _ => fail!("Invalid types for '>=' operation"),
-                    };
-                    current_task.stack.push(Value::Bool(res));
-                }
                 OpCode::And => {
                     let b = pop!();
                     let a = pop!();
@@ -1924,9 +2200,9 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                 OpCode::Pop => {
                     pop!();
                 }
-                OpCode::SetLine(line) => {
-                    current_line = line;
-                }
+            OpCode::SetLine(line) => {
+                current_line = line;
+            }
                 OpCode::Closure(func, upvalues) => {
                     let mut captured = Vec::new();
                     for loc in upvalues.iter() {
@@ -2054,6 +2330,62 @@ fn execute_task_slice(mut current_task: Task, shared: &Arc<SharedRuntime>) -> Sl
                         }
                     } else {
                         fail!("Cannot unpack non-tuple value");
+                    }
+                }
+                OpCode::UnpackList(expected_len) => {
+                    let obj = pop!();
+                    let elements = match obj {
+                        Value::ObjRef(id) => {
+                            let list_opt = shared.heap.with_read(id, |o| {
+                                if let heap::Obj::List(list) = o {
+                                    Some(list.clone())
+                                } else {
+                                    None
+                                }
+                            }).ok().flatten();
+                            match list_opt {
+                                Some(l) => l,
+                                None => fail!("Cannot unpack non-list value with list pattern"),
+                            }
+                        }
+                        _ => fail!("Cannot unpack non-list value with list pattern"),
+                    };
+
+                    if elements.len() < expected_len {
+                        fail!("Cannot unpack list of length {} into {} variables (not enough elements)", elements.len(), expected_len);
+                    }
+
+                    for i in 0..expected_len {
+                        current_task.stack.push(elements[i].clone());
+                    }
+                }
+                OpCode::UnpackObject(props) => {
+                    let obj = pop!();
+                    match obj {
+                        Value::ObjRef(id) => {
+                            let (map_fields, inst_fields) = shared.heap.with_read(id, |o| {
+                                match o {
+                                    heap::Obj::Map(m) => (Some(m.clone()), None),
+                                    heap::Obj::Instance { fields, .. } => (None, Some(fields.clone())),
+                                    _ => (None, None),
+                                }
+                            }).unwrap_or((None, None));
+
+                            if let Some(m) = map_fields {
+                                for prop in props.iter() {
+                                    let val = m.get(prop.as_str()).cloned().unwrap_or(Value::Nil);
+                                    current_task.stack.push(val);
+                                }
+                            } else if let Some(f) = inst_fields {
+                                for prop in props.iter() {
+                                    let val = f.get(prop.as_str()).cloned().unwrap_or(Value::Nil);
+                                    current_task.stack.push(val);
+                                }
+                            } else {
+                                fail!("Cannot unpack non-object value with object pattern");
+                            }
+                        }
+                        _ => fail!("Cannot unpack non-object value with object pattern"),
                     }
                 }
                 OpCode::Spawn(arg_count) => {

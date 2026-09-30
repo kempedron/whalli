@@ -164,7 +164,7 @@ impl Backend {
                     if tokens[i].kind == TokenKind::Import && i + 1 < tokens.len() {
                         match &tokens[i + 1].kind {
                             TokenKind::Identifier(mod_name) => {
-                                if !["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql"].contains(&mod_name.as_str()) {
+                                if !["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql", "crypto"].contains(&mod_name.as_str()) {
                                     let line_idx = tokens[i].line.saturating_sub(1);
                                     let line_str = lines.get(line_idx).unwrap_or(&"");
                                     let start_col = line_str.find(mod_name.as_str()).unwrap_or(0);
@@ -182,7 +182,7 @@ impl Backend {
                                         severity: Some(DiagnosticSeverity::WARNING),
                                         source: Some("whalli".to_string()),
                                         message: format!(
-                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync, requests, http, sql (or use import \"./path.wh\")",
+                                            "Unknown module '{}'. Built-in modules are: net, fs, time, math, json, os, sync, requests, http, sql, crypto (or use import \"./path.wh\")",
                                             mod_name
                                         ),
                                         ..Default::default()
@@ -260,6 +260,37 @@ impl Backend {
                             ),
                             ..Default::default()
                         });
+                    }
+                }
+
+                // 3. Constant division by zero warning
+                for (idx, token) in tokens.iter().enumerate() {
+                    if token.kind == TokenKind::Div && idx + 1 < tokens.len() {
+                        let next = &tokens[idx + 1];
+                        let is_zero = match next.kind {
+                            TokenKind::Int(0) => true,
+                            TokenKind::Float(f) if f == 0.0 => true,
+                            _ => false,
+                        };
+                        if is_zero {
+                            let line_idx = token.line.saturating_sub(1);
+                            diagnostics.push(Diagnostic {
+                                range: Range {
+                                    start: Position {
+                                        line: line_idx as u32,
+                                        character: 0,
+                                    },
+                                    end: Position {
+                                        line: line_idx as u32,
+                                        character: 20,
+                                    },
+                                },
+                                severity: Some(DiagnosticSeverity::WARNING),
+                                source: Some("whalli-lint".to_string()),
+                                message: "Division by constant zero will cause runtime panic".to_string(),
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             }
@@ -623,10 +654,10 @@ impl LanguageServer for Backend {
 
         // Do not allow renaming builtins or keywords
         let reserved = [
-            "net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql", "println", "print", "range", "new", "len",
+            "net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql", "crypto", "println", "print", "range", "new", "len",
             "push", "pop", "keys", "remove", "int", "float", "str", "bool", "let",
             "func", "return", "if", "else", "while", "for", "in", "break", "continue",
-            "import", "struct", "impl", "is", "interface", "wo", "defer", "true", "false", "nil",
+            "import", "from", "struct", "impl", "is", "interface", "wo", "defer", "true", "false", "nil",
         ];
         if reserved.contains(&target.as_str()) {
             return Ok(None);
@@ -849,6 +880,19 @@ impl LanguageServer for Backend {
                 "sql" => {
                     items.push(create_snippet("open", "func sql.open(driver: str, conn_str: str) -> (db: map, err: str | nil)\nOpens connection to SQL database (e.g. 'sqlite', 'postgres', 'mysql')", "open(${1:\"sqlite\"}, ${2:\":memory:\"})"));
                 }
+                "crypto" => {
+                    items.push(create_snippet("sha256", "func crypto.sha256(data: str | bytes) -> str\nComputes SHA-256 hash digest (hex)", "sha256(${1:data})"));
+                    items.push(create_snippet("sha1", "func crypto.sha1(data: str | bytes) -> str\nComputes SHA-1 hash digest (hex)", "sha1(${1:data})"));
+                    items.push(create_snippet("md5", "func crypto.md5(data: str | bytes) -> str\nComputes MD5 hash digest (hex)", "md5(${1:data})"));
+                    items.push(create_snippet("hmac_sha256", "func crypto.hmac_sha256(key: str | bytes, message: str | bytes) -> str\nComputes HMAC-SHA256 signature (hex)", "hmac_sha256(${1:key}, ${2:message})"));
+                    items.push(create_snippet("base64_encode", "func crypto.base64_encode(data: str | bytes) -> str\nEncodes data into Base64 string", "base64_encode(${1:data})"));
+                    items.push(create_snippet("base64_decode", "func crypto.base64_decode(encoded: str) -> (bytes | nil, str | nil)\nDecodes Base64 string into bytes", "base64_decode(${1:encoded})"));
+                    items.push(create_snippet("hex_encode", "func crypto.hex_encode(data: bytes | str) -> str\nEncodes data into hex string", "hex_encode(${1:data})"));
+                    items.push(create_snippet("hex_decode", "func crypto.hex_decode(hex_str: str) -> (bytes | nil, str | nil)\nDecodes hex string into bytes", "hex_decode(${1:hex_str})"));
+                    items.push(create_snippet("random_bytes", "func crypto.random_bytes(length: int = 16) -> bytes\nGenerates cryptographically random bytes", "random_bytes(${1:16})"));
+                    items.push(create_snippet("random_hex", "func crypto.random_hex(length: int = 16) -> str\nGenerates cryptographically random hex token", "random_hex(${1:16})"));
+                    items.push(create_snippet("uuid4", "func crypto.uuid4() -> str\nGenerates random UUID version 4 string", "uuid4()"));
+                }
                 _ => {
                     // Check if caller matches a known struct with methods
                     for imp in &index.impls {
@@ -902,6 +946,10 @@ impl LanguageServer for Backend {
                     items.push(create_snippet("to_upper", "method str.to_upper() -> str\nConverts string to uppercase", "to_upper()"));
                     items.push(create_snippet("starts_with", "method str.starts_with(prefix: str) -> bool\nChecks string prefix", "starts_with(${1:\"prefix\"})"));
                     items.push(create_snippet("ends_with", "method str.ends_with(suffix: str) -> bool\nChecks string suffix", "ends_with(${1:\"suffix\"})"));
+                    items.push(create_snippet("send", "method ws.send(message: str | bytes)\nSends WebSocket text or binary frame", "send(${1:message})"));
+                    items.push(create_snippet("read", "method ws.read() -> (message: str | bytes | nil, err: str | nil)\nReads WebSocket frame from connection", "read()"));
+                    items.push(create_snippet("set", "method req.set(key: str, val: any)\nStores value in request context state", "set(${1:key}, ${2:val})"));
+                    items.push(create_snippet("get", "method req.get(key: str, default: any = nil) -> any\nRetrieves value from request context state", "get(${1:key})"));
                 }
             }
         } else {
@@ -912,6 +960,9 @@ impl LanguageServer for Backend {
             items.push(create_snippet("new list", "Allocates a new heap list", "new(list)"));
             items.push(create_snippet("new map", "Allocates a new heap map", "new(map)"));
             items.push(create_snippet("new chan", "Allocates a new woroutine channel", "new(chan, ${1:capacity})"));
+            items.push(create_snippet("ws-server", "WebSocket handler endpoint snippet", "func ws_handler(req) {\n    let (ws, err) = http.upgrade(req)\n    if err != nil {\n        return http.text_response(400, err)\n    }\n    while true {\n        let (msg, r_err) = ws.read()\n        if msg != nil {\n            ws.send(f\"Echo: {msg}\")\n        }\n        if r_err != nil and r_err != \"WouldBlock\" {\n            break\n        }\n    }\n    ws.close()\n    return nil\n}"));
+            items.push(create_snippet("http-route", "HTTP JSON route handler snippet", "router.get(\"${1:/api/path}\", func(req) {\n    return http.json_response(200, {\"status\": \"ok\"})\n})"));
+            items.push(create_snippet("defer-unlock", "Mutex locking with defer cleanup snippet", "mu.lock()\ndefer mu.unlock()"));
             items.push(create_snippet("select", "Multiplexes channel operations", "select {\n\t${1:msg} <- ${2:ch} => ${0},\n\tdefault => {}\n}"));
             items.push(create_snippet("sync.WaitGroup", "Creates a WaitGroup", "let wg = sync.WaitGroup()\nwg.add(${1:1})\n"));
             items.push(create_snippet("sync.Mutex", "Creates a Mutex", "let mu = sync.Mutex()\nmu.lock()\n${1}\nmu.unlock()\n"));
@@ -919,7 +970,7 @@ impl LanguageServer for Backend {
             // Keywords
             for kw in [
                 "let", "func", "return", "if", "else", "while", "for", "in",
-                "and", "or", "not", "break", "continue", "import", "as", "pub", "struct",
+                "and", "or", "not", "break", "continue", "import", "from", "as", "pub", "struct",
                 "impl", "is", "interface", "wo", "defer", "match", "select", "default", "true", "false", "nil",
             ] {
                 items.push(CompletionItem {
@@ -940,7 +991,7 @@ impl LanguageServer for Backend {
             }
 
             // Modules
-            for m in ["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql"] {
+            for m in ["net", "fs", "time", "math", "json", "os", "sync", "requests", "http", "sql", "crypto"] {
                 items.push(CompletionItem {
                     label: m.to_string(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -1663,6 +1714,30 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             ("http", "text_response") => {
                 "```whalli\nfunc http.text_response(status_code: int, text: str, headers: map = nil) -> str\n```\nFormats an HTTP/1.1 response with `Content-Type: text/plain; charset=utf-8`."
             }
+            ("http", "upgrade") => {
+                "```whalli\nfunc http.upgrade(req: map) -> (ws: map | nil, err: str | nil)\n```\nUpgrades an HTTP request into a bi-directional WebSocket connection per RFC 6455."
+            }
+            ("crypto", "sha256") => {
+                "```whalli\nfunc crypto.sha256(data: str | bytes) -> str\n```\nComputes the SHA-256 hash digest of the input data and returns it as a lowercase hex string."
+            }
+            ("crypto", "hmac_sha256") => {
+                "```whalli\nfunc crypto.hmac_sha256(key: str | bytes, message: str | bytes) -> str\n```\nComputes an HMAC-SHA256 signature for message authentication and returns it as a hex string."
+            }
+            ("crypto", "uuid4") => {
+                "```whalli\nfunc crypto.uuid4() -> str\n```\nGenerates a cryptographically random RFC 4122 version 4 UUID string."
+            }
+            (_, "send") => {
+                "```whalli\nmethod ws.send(message: str | bytes)\n```\nTransmits a text or binary WebSocket frame to the connected client."
+            }
+            (_, "read") => {
+                "```whalli\nmethod ws.read() -> (message: str | bytes | nil, err: str | nil)\n```\nReads the next message frame from the WebSocket connection."
+            }
+            (_, "set") => {
+                "```whalli\nmethod req.set(key: str, val: any)\n```\nStores a custom value inside the request context `req[\"state\"]` for middleware sharing."
+            }
+            (_, "get") => {
+                "```whalli\nmethod req.get(key: str, default: any = nil) -> any\n```\nRetrieves a value from request context `req[\"state\"]` or request parameters."
+            }
             (_, "close") => {
                 "```whalli\nmethod chan.close()\n```\nCloses the channel. Subsequent writes will fail, and readers will receive remaining buffered elements followed by `nil`."
             }
@@ -1839,7 +1914,8 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             "return" => "### Keyword `return`\nExits the current function and passes back the specified result value.\n\n---\n\n### Examples\n```whalli\nfunc square(n: int) -> int {\n    return n * n\n}\n```".to_string(),
             "break" => "### Keyword `break`\nImmediately terminates the innermost `for` or `while` loop.".to_string(),
             "continue" => "### Keyword `continue`\nSkips the remainder of current iteration and proceeds to next loop cycle.".to_string(),
-            "import" => "### Keyword `import`\nImports standard library modules (`net`, `fs`, `time`, `math`, `json`, `os`).\n\n---\n\n### Examples\n```whalli\nimport net\nimport json\nimport os\n```".to_string(),
+            "import" => "### Keyword `import`\nImports standard library modules (`net`, `fs`, `time`, `math`, `json`, `os`, `sync`, `requests`, `http`, `sql`) or local files.\n\n---\n\n### Examples\n```whalli\nimport net\nimport \"./utils.wh\" as utils\nfrom \"./math.wh\" import add, sub\n```".to_string(),
+            "from" => "### Keyword `from`\nImports specific symbols from a local module file or standard library.\n\n---\n\n### Examples\n```whalli\nfrom \"./math.wh\" import add, multiply\nfrom \"./config.wh\" import port, host\n```".to_string(),
             "true" => "Boolean literal representing truth (`true`).".to_string(),
             "false" => "Boolean literal representing falsehood (`false`).".to_string(),
             "nil" => "Literal representing absence of value (`nil`).".to_string(),
@@ -1861,6 +1937,9 @@ pub fn get_hover_info(text: &str, pos: Position, index: &DocumentIndex) -> Optio
             }
             "sql" => {
                 "### Module `sql`\nSQL Database client for SQLite, PostgreSQL, and MySQL.\n\n---\n\n### Examples\n```whalli\nimport sql\n\n// SQLite\nlet (db, err) = sql.open(\"sqlite\", \"app.db\")\n\n// PostgreSQL\nlet (db2, err) = sql.open(\"postgres\", \"postgresql://user:pass@localhost:5432/mydb\")\n\n// MySQL\nlet (db3, err) = sql.open(\"mysql\", \"mysql://user:pass@localhost:3306/mydb\")\n\ndb.exec(\"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)\")\ndb.exec(\"INSERT INTO users (name) VALUES (?)\", [\"Alice\"])\n\nlet (rows, _) = db.query(\"SELECT * FROM users WHERE id > ?\", [0])\nlet (user, _) = db.query_row(\"SELECT * FROM users WHERE id = ?\", [1])\ndb.close()\n```\n\n#### Members:\n- `open(driver, conn_str) -> (db, err)`: Opens connection to database (sqlite, postgres, mysql)".to_string()
+            }
+            "crypto" => {
+                "### Module `crypto`\nCryptographic functions: SHA-256, SHA-1, MD5, HMAC, random tokens, Base64/Hex encoding, and UUIDv4.\n\n---\n\n### Examples\n```whalli\nimport crypto\n\nlet hash = crypto.sha256(\"secret data\")\nlet token = crypto.random_hex(16)\nlet uuid = crypto.uuid4()\n```\n\n#### Members:\n- `sha256(data)`: Computes SHA-256 hash (hex)\n- `sha1(data)`: Computes SHA-1 hash (hex)\n- `md5(data)`: Computes MD5 hash (hex)\n- `hmac_sha256(key, msg)`: Computes HMAC-SHA256 signature\n- `random_bytes(len)`: Cryptographically secure random bytes\n- `random_hex(len)`: Random hex string\n- `uuid4()`: Random UUID version 4\n- `base64_encode(data)`: Encodes to Base64\n- `base64_decode(str)`: Decodes Base64 to bytes\n- `hex_encode(data)`: Encodes to Hex\n- `hex_decode(str)`: Decodes Hex to bytes".to_string()
             }
             _ => {
                 if let Some(f) = index.functions.iter().find(|f| f.name == word) {
@@ -2053,6 +2132,99 @@ pub fn find_definition(
                 },
             },
         });
+    }
+
+    // Check if word is imported via 'from "path.wh" import word' or 'from "./..." import ... as word'
+    let mut lexer = Lexer::new(text);
+    if let Ok(tokens) = lexer.tokenize() {
+        let mut i = 0;
+        while i < tokens.len() {
+            if tokens[i].kind == TokenKind::From && i + 3 < tokens.len() {
+                let file_path_str = match &tokens[i + 1].kind {
+                    TokenKind::Str(p) => Some(p.clone()),
+                    _ => None,
+                };
+                if tokens[i + 2].kind == TokenKind::Import {
+                    let mut j = i + 3;
+                    while j < tokens.len() {
+                        let sym_name = match &tokens[j].kind {
+                            TokenKind::Identifier(id) => Some(id.clone()),
+                            _ => None,
+                        };
+                        j += 1;
+                        let mut local_alias = sym_name.clone();
+                        if j < tokens.len() && tokens[j].kind == TokenKind::As {
+                            j += 1;
+                            if j < tokens.len() {
+                                if let TokenKind::Identifier(ref a) = tokens[j].kind {
+                                    local_alias = Some(a.clone());
+                                }
+                                j += 1;
+                            }
+                        }
+
+                        if local_alias.as_deref() == Some(word) || sym_name.as_deref() == Some(word) {
+                            if let Some(ref rel_path) = file_path_str {
+                                if let Ok(doc_path) = uri.to_file_path() {
+                                    if let Some(parent) = doc_path.parent() {
+                                        let target = parent.join(rel_path);
+                                        if let Ok(canon) = target.canonicalize() {
+                                            if let Ok(target_url) = Url::from_file_path(&canon) {
+                                                if let Ok(src) = std::fs::read_to_string(&canon) {
+                                                    let target_index = index_document(&src);
+                                                    let find_target = sym_name.unwrap_or_else(|| word.to_string());
+                                                    if let Some(tf) = target_index.functions.iter().find(|f| f.name == find_target) {
+                                                        return Some(Location {
+                                                            uri: target_url,
+                                                            range: Range {
+                                                                start: Position { line: tf.line, character: tf.col },
+                                                                end: Position { line: tf.line, character: tf.col + tf.name.len() as u32 },
+                                                            },
+                                                        });
+                                                    }
+                                                    if let Some(ts) = target_index.structs.iter().find(|s| s.name == find_target) {
+                                                        return Some(Location {
+                                                            uri: target_url,
+                                                            range: Range {
+                                                                start: Position { line: ts.line, character: ts.col },
+                                                                end: Position { line: ts.line, character: ts.col + ts.name.len() as u32 },
+                                                            },
+                                                        });
+                                                    }
+                                                    if let Some(tv) = target_index.variables.iter().find(|v| v.name == find_target) {
+                                                        return Some(Location {
+                                                            uri: target_url,
+                                                            range: Range {
+                                                                start: Position { line: tv.line, character: tv.col },
+                                                                end: Position { line: tv.line, character: tv.col + tv.name.len() as u32 },
+                                                            },
+                                                        });
+                                                    }
+                                                    return Some(Location {
+                                                        uri: target_url,
+                                                        range: Range {
+                                                            start: Position { line: 0, character: 0 },
+                                                            end: Position { line: 0, character: 0 },
+                                                        },
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if j < tokens.len() && tokens[j].kind == TokenKind::Comma {
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
     }
 
     None
@@ -2734,7 +2906,7 @@ pub fn compute_semantic_tokens(text: &str) -> Vec<SemanticToken> {
 
                 let (token_type, token_modifiers) = match word.as_str() {
                     "let" | "func" | "return" | "if" | "else" | "while" | "for" | "in"
-                    | "break" | "continue" | "import" | "as" | "pub" | "struct" | "impl" | "is"
+                    | "break" | "continue" | "import" | "from" | "as" | "pub" | "struct" | "impl" | "is"
                     | "interface" | "wo" | "defer" | "match" | "select" | "default" | "true" | "false" | "nil" => (0, 0), // KEYWORD
 
                     "and" | "or" | "not" => (8, 0), // OPERATOR
@@ -3044,6 +3216,16 @@ struct User {
         if let Some(h) = hover_println {
             if let HoverContents::Markup(m) = h.contents {
                 assert!(m.value.contains("println"));
+            }
+        }
+
+        let crypto_code = "crypto.sha256(data)";
+        let index_c = index_document(crypto_code);
+        let hover_crypto = get_hover_info(crypto_code, Position { line: 0, character: 8 }, &index_c);
+        assert!(hover_crypto.is_some());
+        if let Some(h) = hover_crypto {
+            if let HoverContents::Markup(m) = h.contents {
+                assert!(m.value.contains("SHA-256"));
             }
         }
     }

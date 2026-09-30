@@ -41,6 +41,9 @@ http.listen_and_serve(":8080", router)
 | `req["method"]` | HTTP метод (`"GET"`, `"POST"` и т.д.) |
 | `req["path"]` | Путь URL (`"/api/tasks"`) |
 | `req["remote_addr"]` | IP-адрес и порт клиента (`"127.0.0.1:54321"`) |
+| `req["state"]` | Словарь контекста для передачи данных между middleware и хэндлерами |
+| `req.set(key, val)` | Сохранить значение в контекст запроса |
+| `req.get(key, default = nil)` | Прочитать значение из контекста запроса |
 | `req.header(key, default = nil)` | Регистронезависимый поиск заголовка |
 | `req.cookie(name, default = nil)` | Извлечение куки из заголовка `Cookie` |
 | `req.query(key, default = nil)` | Параметр query-строки URL |
@@ -106,6 +109,39 @@ router.use(http.rate_limiter(100, 60)) // 100 запросов за 60 секу�
 ```whalli
 // Безопасная раздача файлов из каталога с определением MIME-типов и защитой от path traversal (..)
 router.static("/public", "./static_files")
+```
+
+### Поддержка WebSockets (RFC 6455)
+
+Whalli поддерживает переход HTTP-соединения в двунаправленный протокол WebSocket:
+
+```whalli
+import http
+
+let router = http.router()
+
+router.get("/ws", func(req) {
+    let (ws, err) = http.upgrade(req)
+    if err != nil {
+        return http.text_response(400, err)
+    }
+
+    // Чтение и отправка WebSocket фреймов
+    while true {
+        let (msg, r_err) = ws.read()
+        if msg != nil {
+            println("Получено от клиента:", msg)
+            ws.send("Эхо: " + msg)
+        }
+        if r_err != nil and r_err != "WouldBlock" {
+            break
+        }
+    }
+    ws.close()
+    return nil
+})
+
+http.listen_and_serve(":8080", router)
 ```
 
 ---

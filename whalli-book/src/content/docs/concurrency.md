@@ -11,7 +11,7 @@ Whalli implements an M:N work-stealing cooperative multitasking scheduler backed
 - **Non-blocking Operations**: Tasks yield control on `time.sleep`, channel operations, I/O events, and synchronization barriers.
 - **Dedicated I/O & Timer Poller**: A background event thread manages `mio::Poll` events and timer channels.
 
-## Woroutines (`wo`)
+## Woroutines (`wo`) and Task Handles
 
 Spawn a woroutine using the `wo` keyword:
 
@@ -28,6 +28,31 @@ func worker(id: int) {
 wo worker(1)
 wo worker(2)
 ```
+
+The `wo func(...)` expression returns a `TaskHandle`. This handle lets you monitor execution status, wait for results, and isolate panics:
+
+```whalli
+func calculate(a: int, b: int) -> int {
+    return a + b
+}
+
+let task = wo calculate(20, 22)
+
+// 1. Await via .result() -> (res, err)
+let (res, err) = task.result()
+println("Result:", res) // 42
+
+// 2. Await via channel receive operator '<-'
+let task2 = wo calculate(10, 5)
+let (val, _) = <- task2
+
+// 3. Non-blocking status check
+if task.is_done() {
+    println("Status:", task.status()) // "completed" or "failed"
+}
+```
+
+If a woroutine panics (e.g. division by zero), the VM isolates the error within the task handle and returns it in `err`, while ensuring all registered `defer` blocks are safely unwound.
 
 ## Channels (`chan`)
 

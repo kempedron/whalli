@@ -52,9 +52,9 @@ fn main() -> std::io::Result<()> {
     };
 
     let compiler = Compiler::new();
-    let bytecode = compiler.compile(&ast);
+    let func_obj = compiler.compile_function(&ast);
 
-    let mut vm = VM::new(bytecode);
+    let mut vm = VM::new_with_function(func_obj);
 
     if let Err(err) = vm.run() {
         println!("Traceback (most recent call last):");
@@ -66,7 +66,7 @@ fn main() -> std::io::Result<()> {
             println!("    {}", code_line);
             println!("    \x1b[31m{}\x1b[0m", "^".repeat(code_line.len()));
         }
-        println!("\x1b[31mRuntimeError: {}\x1b[0m", err.message);
+        println!("\x1b[31mRuntimeError: {} (line {})\x1b[0m", err.message, err.line);
     }
 
     Ok(())

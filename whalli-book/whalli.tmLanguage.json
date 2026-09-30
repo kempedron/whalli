@@ -8,8 +8,19 @@
       "match": "//.*$"
     },
     {
+      "name": "string.quoted.triple.whalli",
+      "begin": "(f|r)?\"\"\"",
+      "end": "\"\"\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.whalli",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
       "name": "string.quoted.double.whalli",
-      "begin": "f?\"",
+      "begin": "(b|f|r|br)?\"",
       "end": "\"",
       "patterns": [
         {
@@ -28,7 +39,7 @@
     },
     {
       "name": "keyword.declaration.whalli",
-      "match": "\\b(let|func|struct|impl|interface|import)\\b"
+      "match": "\\b(let|func|struct|impl|interface|import|from|as|pub)\\b"
     },
     {
       "name": "keyword.operator.logical.whalli",
@@ -44,7 +55,7 @@
     },
     {
       "name": "support.class.whalli",
-      "match": "\\b(net|fs|time|math|json|os|sync|requests|http|sql)\\b"
+      "match": "\\b(net|fs|time|math|json|os|sync|requests|http|sql|crypto)\\b"
     },
     {
       "name": "support.function.builtin.whalli",

@@ -9,8 +9,8 @@ pub fn run_code(code: &str) -> VM {
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parser error");
     let compiler = Compiler::new();
-    let bytecode = compiler.compile(&ast);
-    let mut vm = VM::new(bytecode);
+    let func_obj = compiler.compile_function(&ast);
+    let mut vm = VM::new_with_function(func_obj);
     vm.run().expect("Runtime error");
     vm
 }
